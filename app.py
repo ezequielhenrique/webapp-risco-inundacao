@@ -74,3 +74,8 @@ def config():
 
     save_config(config)
     return redirect(url_for("index"))
+
+
+@app.route("/sobre", methods=["GET"])
+def sobre():
+    return render_template('sobre.html')

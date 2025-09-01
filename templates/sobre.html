@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="sobre-section">
+    <h2>O que é o GeoCritério?</h2>
+    <p>
+        O <strong>GeoCritério</strong> é uma aplicação web interativa desenvolvida para realizar análises multicritério de suscetibilidade a inundações no estado de Pernambuco. Seu objetivo é fornecer uma ferramenta de fácil uso para especialistas, pesquisadores e gestores públicos avaliarem riscos permitindo decisões mais informadas no planejamento urbano e na gestão ambiental.
+    </p>
+
+    <h2>Como funciona</h2>
+    <p>
+        A plataforma conta com duas telas principais. Na primeira, o usuário seleciona o município desejado, executa a análise e visualiza o resultado diretamente no mapa interativo. Na segunda, é possível ajustar os pesos dos critérios seguindo a metodologia <strong>AHP (Analytic Hierarchy Process)</strong> e alterar parâmetros de reclassificação, adaptando a análise às necessidades específicas.
+    </p>
+
+    <h2>Metodologia e Tecnologias</h2>
+    <p>
+        O backend do GeoCritério foi desenvolvido com <strong>Flask</strong> e scripts Python que utilizam bibliotecas como <em>Rasterio</em>, <em>GeoPandas</em> e <em>NumPy</em> para processar e analisar dados geoespaciais.
+    </p>
+
+    <div class="highlight">
+        <h3>Principais Recursos</h3>
+        <ul>
+            <li>Seleção de município e execução de análise com poucos cliques</li>
+            <li>Ajuste de pesos e critérios via metodologia AHP</li>
+            <li>Mapas interativos com coordenadas e marcadores</li>
+            <li>Possibilidade de expansão com novos critérios e camadas de dados</li>
+        </ul>
+    </div>
+
+    <h2>Importância</h2>
+    <p>
+        Ao integrar dados espaciais e análise multicritério em uma ferramenta acessível, o GeoCritério apoia a tomada de decisão, contribuindo para estratégias de mitigação de riscos e prevenção de desastres naturais.
+    </p>
+</section>
+
+{% endblock %}
