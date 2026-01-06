@@ -71,16 +71,30 @@ class AnaliseService:
 
 
     def _definir_sistema_coordenadas(self, gdf_municipio):
-        zona_24s = "EPSG:31984"     # SIRGAS 2000 / UTM 24S
-        zona_25s = "EPSG:31985"     # SIRGAS 2000 / UTM 25S
+        """Define CRS projetado (SIRGAS 2000 / UTM) baseado na longitude do município.
 
-        centroid = gdf_municipio.geometry.centroid.iloc[0]
-        lon = centroid.x
+        Pernambuco pode cair em mais de uma zona UTM (principalmente 23S, 24S, 25S).
+        Usar a zona correta melhora alinhamento/área e evita distorções desnecessárias.
+        """
 
-        if lon < -36:
-            self.sistema_coordenadas = zona_24s
-        else:
-            self.sistema_coordenadas = zona_25s
+        gdf = gdf_municipio
+        try:
+            if gdf.crs is None or str(gdf.crs).upper() != "EPSG:4326":
+                gdf = gdf.to_crs(epsg=4326)
+        except Exception:
+            # Se houver problema de CRS, cai no comportamento antigo (assume 25S)
+            self.sistema_coordenadas = "EPSG:31985"
+            return
+
+        centroid = gdf.geometry.centroid.iloc[0]
+        lon = float(centroid.x)
+
+        # Zona UTM padrão: zone = floor((lon + 180) / 6) + 1
+        utm_zone = int(np.floor((lon + 180.0) / 6.0) + 1)
+
+        # SIRGAS 2000 / UTM zone {Z}S => EPSG:31960 + Z (ex.: 23S->31983, 24S->31984, 25S->31985)
+        epsg_code = 31960 + utm_zone
+        self.sistema_coordenadas = f"EPSG:{epsg_code}"
     
     def _criar_shapefile_municipio(self, gdf_municipio):
         gdf_reproj = gdf_municipio.to_crs(self.sistema_coordenadas)
@@ -143,7 +157,7 @@ class AnaliseService:
         Estratégia:
         1) Se houver mapeamento em static/config/config.json (dados.mde), usa-o.
         2) Tenta um MDE por-cidade (dados/mde_<cidade>.tif).
-        3) Por fim, usa o MDE estadual (dados/mde_pernambuco.tif) quando existir.
+        3) Por fim, usa o MDE estadual (preferindo dados/mde_pernambuco_srtm.tif) quando existir.
         """
 
         config = load_config() or {}
@@ -163,7 +177,13 @@ class AnaliseService:
             Path(f"dados/mde_{self.cidade.replace('-', '_')}.tif"),
         ]
 
-        candidates.append(Path("dados/mde_pernambuco.tif"))
+        # MDE estadual (preferir nome com identificação do produto de origem)
+        candidates.extend(
+            [
+                Path("dados/mde_pernambuco_srtm.tif"),
+                Path("dados/mde_pernambuco.tif"),
+            ]
+        )
 
         for p in candidates:
             if p.exists():
@@ -172,7 +192,7 @@ class AnaliseService:
         raise FileNotFoundError(
             "Nenhum MDE encontrado. Para rodar em Recife/Belo Jardim, forneça um MDE por-cidade em: "
             f"dados/mde_{self.cidade}.tif (ou configure dados.mde no static/config/config.json). "
-            "Para generalizar para todo o estado, gere/adicione o mosaico estadual em dados/mde_pernambuco.tif."
+            "Para generalizar para todo o estado, gere/adicione o mosaico estadual em dados/mde_pernambuco_srtm.tif (ou configure dados.mde.estado)."
         )
 
     def _processar_mde(self):

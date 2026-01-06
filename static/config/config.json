@@ -7,7 +7,7 @@
         "mde": {
             "recife": "dados/mde_recife.tif",
             "belo-jardim": "dados/mde_belo-jardim.tif",
-            "estado": "dados/mde_pernambuco.tif"
+            "estado": "dados/mde_pernambuco_srtm.tif"
         }
     },
     "ui": {

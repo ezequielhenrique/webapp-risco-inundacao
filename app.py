@@ -277,12 +277,28 @@ def index():
     config = load_config() or {}
     lista_cidades = municipios.get_nome_cidades()
 
+    def _get_mde_estadual_path(cfg: dict):
+        mde_cfg = (cfg.get("dados") or {}).get("mde")
+        candidates: list[Path] = []
+        if isinstance(mde_cfg, dict) and mde_cfg.get("estado"):
+            candidates.append(Path(str(mde_cfg["estado"])))
+        candidates.extend(
+            [
+                Path("dados/mde_pernambuco_srtm.tif"),
+                Path("dados/mde_pernambuco.tif"),
+            ]
+        )
+        for p in candidates:
+            if p.exists():
+                return p
+        return None
+
     ui_cfg = config.get("ui") if isinstance(config.get("ui"), dict) else {}
     mostrar_ajustar_parametros = bool((ui_cfg or {}).get("mostrar_ajustar_parametros", False))
 
     # Opcional: limitar a lista de cidades enquanto o MDE estadual não está disponível
     cidades_suportadas = config.get("cidades_suportadas")
-    mde_estadual_existe = Path("dados/mde_pernambuco.tif").exists()
+    mde_estadual_existe = _get_mde_estadual_path(config) is not None
     if (not mde_estadual_existe) and isinstance(cidades_suportadas, list) and cidades_suportadas:
         permitidas = set(cidades_suportadas)
         lista_cidades = [c for c in lista_cidades if c in permitidas]
@@ -309,7 +325,17 @@ def executar_analise():
 
     # Se não houver MDE estadual, impede cidades fora da allowlist (quando definida)
     cidades_suportadas = config.get("cidades_suportadas")
-    mde_estadual_existe = Path("dados/mde_pernambuco.tif").exists()
+    mde_cfg = (config.get("dados") or {}).get("mde")
+    mde_estadual_candidates: list[Path] = []
+    if isinstance(mde_cfg, dict) and mde_cfg.get("estado"):
+        mde_estadual_candidates.append(Path(str(mde_cfg["estado"])))
+    mde_estadual_candidates.extend(
+        [
+            Path("dados/mde_pernambuco_srtm.tif"),
+            Path("dados/mde_pernambuco.tif"),
+        ]
+    )
+    mde_estadual_existe = any(p.exists() for p in mde_estadual_candidates)
     if (
         isinstance(cidades_suportadas, list)
         and cidades_suportadas
@@ -323,7 +349,7 @@ def executar_analise():
                     "mensagem": (
                         f"Cidade '{cidade}' não está habilitada neste modo de teste. "
                         "Habilite-a em static/config/config.json (cidades_suportadas) "
-                        "ou adicione o MDE estadual em dados/mde_pernambuco.tif."
+                        "ou adicione o MDE estadual em dados/mde_pernambuco_srtm.tif (ou ajuste dados.mde.estado)."
                     ),
                 }
             ),

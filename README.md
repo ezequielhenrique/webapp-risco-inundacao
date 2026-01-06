@@ -64,7 +64,9 @@ A análise precisa de um Modelo Digital de Elevação (MDE). O serviço resolve 
 
 1. **Configuração em** `static/config/config.json` → `dados.mde` (por cidade ou estadual)
 2. Arquivos por cidade em `dados/mde_<cidade>.tif` (ex.: `dados/mde_recife.tif`)
-3. Mosaico estadual: `dados/mde_pernambuco.tif`
+3. Mosaico estadual (preferir nome com a fonte):
+  - `dados/mde_pernambuco_srtm.tif`
+  - (compatível) `dados/mde_pernambuco.tif`
 
 Se nenhum existir, a análise falha com mensagem indicando os caminhos esperados.
 

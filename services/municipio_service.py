@@ -381,6 +381,17 @@ class MunicipioService:
                 box-shadow: 3px 3px 5px rgba(0,0,0,0.25);
             ">
                 <b>Pesos (AHP simplificado)</b><br>
+                <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
+                    <button id="w_reset_btn" type="button" style="
+                        padding: 4px 8px;
+                        border: 1px solid #777;
+                        background: #f7f7f7;
+                        border-radius: 4px;
+                        cursor: pointer;
+                        font-size: 12px;
+                    ">Resetar</button>
+                    <span style="color:#666; font-size:12px;">volta ao padrão do AHP</span>
+                </div>
                 <div style=\"margin-top:6px;\">
                     <label>Uso do solo: <span id=\"w_uso_val\">{w_uso0:.4g}</span></label>
                     <div style=\"display:flex; gap:6px; align-items:center;\">
@@ -451,6 +462,8 @@ class MunicipioService:
 
         // Pesos atuais (para o clique/popup e para sincronizar overlay)
         window.__currentWeights = _normW([{w_uso0}, {w_decl0}, {w_flux0}, {w_hipso0}]);
+        // Pesos padrão (iniciais) para o botão de reset
+        window.__initialWeights = [{w_uso0}, {w_decl0}, {w_flux0}, {w_hipso0}];
 
         function _fmt(v) {{
             if (v === null || v === undefined) return '—';
@@ -563,11 +576,33 @@ class MunicipioService:
             }}, 250);
         }}
 
+        function _setWeightsRaw(raw) {{
+            const ids = ['uso','decl','flux','hipso'];
+            ids.forEach((s, i) => {{
+                const v = (raw && raw.length === 4 && isFinite(raw[i])) ? Number(raw[i]) : 0;
+                const num = document.getElementById(`w_${{s}}_num`);
+                const rng = document.getElementById(`w_${{s}}`);
+                if (num) num.value = v.toFixed(6);
+                if (rng) rng.value = v.toFixed(6);
+            }});
+            _scheduleOverlayUpdate('reset');
+        }}
+
         // Conecta sliders
         ['w_uso','w_decl','w_flux','w_hipso','w_uso_num','w_decl_num','w_flux_num','w_hipso_num'].forEach(id => {{
             const el = document.getElementById(id);
             if (el) el.addEventListener('input', () => _scheduleOverlayUpdate(id));
         }});
+
+        // Botão de reset
+        const resetBtn = document.getElementById('w_reset_btn');
+        if (resetBtn) {{
+            resetBtn.addEventListener('click', (ev) => {{
+                ev.preventDefault();
+                ev.stopPropagation();
+                _setWeightsRaw(window.__initialWeights);
+            }});
+        }}
         // Render inicial com maior precisão
         _renderWeights(_getWeights());
 
@@ -647,24 +682,25 @@ class MunicipioService:
         macro = MacroElement()
         macro._template = Template(template)
 
-        pontos_alagamento = [
-            ("Rua Imperial, bairro de São José", -8.07581, -34.89415),
-            ("Rua Nicolau Pereira", -8.07804, -34.90558),
-            ("Av. Eng. Abdias de Carvalho", -8.06123, -34.92227),
-            ("Av. Dois Rios", -8.11289, -34.93864),
-            ("Av. Mal Mascarenhas de Moraes", -8.11383, -34.91281),
-            ("Av. Recife próximo ao cruzamento com a Rua João Cabral de Melo Neto", -8.07953, -34.93374),
-            ("Av. Abdias de Carvalho, no cruzamento com a rua Delmiro Gouveia", -8.06252, -34.93219),
-            ("Av. Norte Miguel Arraes de Alencar, ao lado do Senai", -8.04713, -34.87757)
-        ]
+        # Marcadores de pontos de alagamento: apenas para Recife
+        if str(nome_cidade).strip().casefold() == "recife":
+            pontos_alagamento = [
+                ("Rua Imperial, bairro de São José", -8.07581, -34.89415),
+                ("Rua Nicolau Pereira", -8.07804, -34.90558),
+                ("Av. Eng. Abdias de Carvalho", -8.06123, -34.92227),
+                ("Av. Dois Rios", -8.11289, -34.93864),
+                ("Av. Mal Mascarenhas de Moraes", -8.11383, -34.91281),
+                ("Av. Recife próximo ao cruzamento com a Rua João Cabral de Melo Neto", -8.07953, -34.93374),
+                ("Av. Abdias de Carvalho, no cruzamento com a rua Delmiro Gouveia", -8.06252, -34.93219),
+                ("Av. Norte Miguel Arraes de Alencar, ao lado do Senai", -8.04713, -34.87757),
+            ]
 
-        # Adicionar marcadores ao mapa
-        for endereco, lat_ponto, lon_ponto in pontos_alagamento:
-            folium.Marker(
-                location=[lat_ponto, lon_ponto],
-                popup=folium.Popup(endereco, max_width=300),
-                icon=folium.Icon(color="red", icon="info-sign")
-            ).add_to(m)
+            for endereco, lat_ponto, lon_ponto in pontos_alagamento:
+                folium.Marker(
+                    location=[lat_ponto, lon_ponto],
+                    popup=folium.Popup(endereco, max_width=300),
+                    icon=folium.Icon(color="red", icon="info-sign"),
+                ).add_to(m)
 
         folium.LayerControl().add_to(m)
 
