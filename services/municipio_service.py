@@ -1,11 +1,14 @@
 import geopandas as gpd
 from rasterio.warp import calculate_default_transform, reproject, Resampling
+from rasterio.mask import mask
 from branca.element import Template, MacroElement
 import rasterio
 from folium.plugins import Draw, MousePosition
 import folium
 import matplotlib.pyplot as plt
 import numpy as np
+
+from utils.utils import load_config
 
 
 class MunicipioService:
@@ -35,10 +38,8 @@ class MunicipioService:
             attr="Esri",
             name="Satélite",
             overlay=False,
-            control=True
+            control=False
         ).add_to(mapa)
-
-        folium.LayerControl().add_to(mapa)
 
         return mapa._repr_html_()
     
@@ -53,12 +54,21 @@ class MunicipioService:
         lat, lon = centro.y, centro.x
 
         # Base map
+        # Importante: não passar a URL de tiles direto no folium.Map, senão o LayerControl
+        # pode exibir a própria URL como "nome" da camada base.
         m = folium.Map(
-            location=[lat, lon], 
+            location=[lat, lon],
             zoom_start=11,
-            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-            attr="Esri"
+            tiles=None,
         )
+
+        folium.TileLayer(
+            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            attr="Esri",
+            name="Satélite",
+            overlay=False,
+            control=False,
+        ).add_to(m)
 
         # GeoJson do município
         folium.GeoJson(
@@ -95,7 +105,13 @@ class MunicipioService:
                 'nodata': nodata
             })
 
-            data_reproj = np.empty((height, width), dtype=src.meta['dtype'])
+            # Inicializar com NoData evita "buracos" por pixels não escritos pelo reproject.
+            # (especialmente perceptível em bordas perto de água / recortes)
+            data_reproj = np.full((height, width), nodata, dtype=src.meta['dtype'])
+            rp_kwargs = {}
+            if not (isinstance(nodata, float) and np.isnan(nodata)):
+                rp_kwargs = {"src_nodata": nodata, "dst_nodata": nodata}
+
             reproject(
                 source=rasterio.band(src, 1),
                 destination=data_reproj,
@@ -103,10 +119,186 @@ class MunicipioService:
                 src_crs=src.crs,
                 dst_transform=transform,
                 dst_crs="EPSG:4326",
-                resampling=Resampling.nearest
+                resampling=Resampling.bilinear,
+                **rp_kwargs,
             )
-            data = np.ma.masked_equal(data_reproj, nodata)
+            # Normalizar valores inválidos para nodata antes de mascarar (evita NaN virar transparência)
+            if isinstance(data_reproj, np.ndarray) and np.issubdtype(data_reproj.dtype, np.floating):
+                data_reproj = data_reproj.astype(np.float32, copy=False)
+                bad = ~np.isfinite(data_reproj)
+                if np.any(bad):
+                    data_reproj[bad] = nodata if not (isinstance(nodata, float) and np.isnan(nodata)) else -9999.0
+
+            # Máscara: NoData e valores inválidos
+            data = np.ma.masked_invalid(data_reproj)
+            if not (isinstance(nodata, float) and np.isnan(nodata)):
+                data = np.ma.masked_equal(data, nodata)
             bounds = rasterio.transform.array_bounds(height, width, transform)
+
+        # Overlay de corpos d'água (azul claro), para distinguir das áreas de risco
+        # Usa os IDs configurados em config.json e reprojeta para o MESMO grid EPSG:4326 do overlay de risco.
+        cfg_water = load_config() or {}
+        uso_cfg = (cfg_water.get("criterios") or {}).get("uso_do_solo") or {}
+        classes_cfg = uso_cfg.get("classes") or {}
+        water_ids = (((classes_cfg.get("corpos_dagua") or {}).get("ids")) if isinstance(classes_cfg, dict) else None)
+        if not isinstance(water_ids, list) or not all(isinstance(x, (int, float)) for x in water_ids):
+            water_ids = [26, 31, 33]
+        water_ids = [int(x) for x in water_ids]
+
+        # Camada extra: uso e ocupação do solo (MapBiomas) com cores (paleta padrão; pode ser ajustada no config)
+        def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+            s = (h or "").strip().lstrip("#")
+            if len(s) != 6:
+                return (176, 176, 176)
+            return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+        try:
+            uso_solo_path = "dados/uso-do-solo-pernambuco-2023.tif"
+            with rasterio.open(uso_solo_path) as uso_src:
+                gdf_uso = gdf
+                if uso_src.crs is not None and str(uso_src.crs).upper() != "EPSG:4326":
+                    gdf_uso = gdf.to_crs(uso_src.crs)
+
+                out_image, out_transform = mask(
+                    uso_src,
+                    gdf_uso.geometry,
+                    crop=True,
+                    filled=True,
+                    nodata=(uso_src.nodata if uso_src.nodata is not None else 0),
+                )
+
+                uso_crop = out_image[0]
+                if uso_src.nodata is not None:
+                    valid_uso = uso_crop != uso_src.nodata
+                else:
+                    valid_uso = np.ones_like(uso_crop, dtype=bool)
+
+                # Reprojetar o raster categórico de uso do solo para o MESMO grid do overlay de risco (EPSG:4326)
+                uso_dst = np.zeros((height, width), dtype=np.int32)
+                reproject(
+                    source=uso_crop.astype(np.int32, copy=False),
+                    destination=uso_dst,
+                    src_transform=out_transform,
+                    src_crs=uso_src.crs,
+                    dst_transform=transform,
+                    dst_crs="EPSG:4326",
+                    resampling=Resampling.nearest,
+                    src_nodata=(int(uso_src.nodata) if uso_src.nodata is not None else 0),
+                    dst_nodata=0,
+                )
+
+                # Paleta: preferir a colortable do próprio GeoTIFF (cores oficiais do MapBiomas).
+                # Se não existir, cai no fallback (cores por grupo) para ainda permitir depuração.
+                id_to_rgb: dict[int, tuple[int, int, int]] = {}
+                try:
+                    cmap = uso_src.colormap(1)  # dict: value -> (r,g,b[,a])
+                except Exception:
+                    cmap = None
+
+                if isinstance(cmap, dict) and cmap:
+                    for k, rgba in cmap.items():
+                        if rgba is None:
+                            continue
+                        if isinstance(rgba, (list, tuple)) and len(rgba) >= 3:
+                            id_to_rgb[int(k)] = (int(rgba[0]), int(rgba[1]), int(rgba[2]))
+                else:
+                    palette_cfg = ((cfg_water.get("mapbiomas") or {}).get("palette")) if isinstance(cfg_water, dict) else None
+                    if not isinstance(palette_cfg, dict):
+                        palette_cfg = {}
+
+                    veget_ids = [int(x) for x in (classes_cfg.get("vegetacao", {}) or {}).get("ids", [])] if isinstance(classes_cfg, dict) else []
+                    plant_ids = [int(x) for x in (classes_cfg.get("regeneracao_floresta_plantada", {}) or {}).get("ids", [])] if isinstance(classes_cfg, dict) else []
+                    agri_ids = [int(x) for x in (classes_cfg.get("agricultura", {}) or {}).get("ids", [])] if isinstance(classes_cfg, dict) else []
+                    urb_ids = [int(x) for x in (classes_cfg.get("urbano", {}) or {}).get("ids", [])] if isinstance(classes_cfg, dict) else []
+                    nao_obs_ids = [int(x) for x in (classes_cfg.get("nao_observado", {}) or {}).get("ids", [])] if isinstance(classes_cfg, dict) else []
+
+                    default_groups = {
+                        "vegetacao": ("#1B5E20", veget_ids),
+                        "floresta_plantada": ("#6A1B9A", plant_ids),
+                        "agricultura": ("#F9A825", agri_ids),
+                        "urbano": ("#C62828", urb_ids),
+                        "corpos_dagua": ("#1E88E5", water_ids),
+                        "nao_observado": ("#9E9E9E", nao_obs_ids),
+                    }
+
+                    for group_name, (default_hex, ids_list) in default_groups.items():
+                        override_hex = palette_cfg.get(group_name) if isinstance(palette_cfg, dict) else None
+                        rgb = _hex_to_rgb(override_hex) if isinstance(override_hex, str) else _hex_to_rgb(default_hex)
+                        for _id in ids_list:
+                            id_to_rgb[int(_id)] = rgb
+
+                uso_rgba = np.zeros((height, width, 4), dtype=np.uint8)
+                # Base: pixels válidos que não caírem em nenhuma cor ficam em cinza (ajuda a achar IDs não previstos)
+                unknown_rgb = _hex_to_rgb("#B0B0B0")
+                unknown_mask = (uso_dst != 0)
+                uso_rgba[unknown_mask, 0] = unknown_rgb[0]
+                uso_rgba[unknown_mask, 1] = unknown_rgb[1]
+                uso_rgba[unknown_mask, 2] = unknown_rgb[2]
+                uso_rgba[unknown_mask, 3] = 255
+
+                for _id, (r, g, b) in id_to_rgb.items():
+                    m_id = (uso_dst == _id)
+                    if not np.any(m_id):
+                        continue
+                    uso_rgba[m_id, 0] = r
+                    uso_rgba[m_id, 1] = g
+                    uso_rgba[m_id, 2] = b
+                    uso_rgba[m_id, 3] = 255
+
+                # Pixels 0 (NoData) ficam transparentes
+                uso_rgba[uso_dst == 0, 3] = 0
+
+                # Não mostrar por padrão (fica disponível no LayerControl)
+                uso_group = folium.FeatureGroup(
+                    name="Uso e ocupação do solo (MapBiomas)",
+                    show=False,
+                    overlay=True,
+                    control=True,
+                )
+                folium.raster_layers.ImageOverlay(
+                    name="Uso e ocupação do solo (MapBiomas)",
+                    image=uso_rgba,
+                    bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
+                    opacity=0.85,
+                    interactive=False,
+                    cross_origin=False,
+                ).add_to(uso_group)
+                uso_group.add_to(m)
+
+                water_src = (np.isin(uso_crop, water_ids) & valid_uso).astype(np.uint8)
+
+                water_dst = np.zeros((height, width), dtype=np.uint8)
+                reproject(
+                    source=water_src,
+                    destination=water_dst,
+                    src_transform=out_transform,
+                    src_crs=uso_src.crs,
+                    dst_transform=transform,
+                    dst_crs="EPSG:4326",
+                    resampling=Resampling.nearest,
+                    src_nodata=0,
+                    dst_nodata=0,
+                )
+
+            water_rgba = np.zeros((height, width, 4), dtype=np.uint8)
+            water_mask = water_dst == 1
+            # azul claro
+            water_rgba[water_mask, 0] = 120  # R
+            water_rgba[water_mask, 1] = 200  # G
+            water_rgba[water_mask, 2] = 255  # B
+            water_rgba[water_mask, 3] = 255  # A (opacity controlado pelo Leaflet)
+
+            folium.raster_layers.ImageOverlay(
+                name="Corpos d'água",
+                image=water_rgba,
+                bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
+                opacity=0.55,
+                interactive=False,
+                cross_origin=False,
+            ).add_to(m)
+        except Exception:
+            # Se faltar o raster de uso do solo ou der erro de reprojeção, apenas não desenha o overlay.
+            pass
 
         # Converter para imagem normalizada (0-255) para overlay
         norm_data = (data - data.min()) / (data.max() - data.min())
@@ -114,7 +306,7 @@ class MunicipioService:
         rgba = (rgba[:, :, :4] * 255).astype(np.uint8)  # converter para 0-255
 
         # Adicionar ao mapa
-        folium.raster_layers.ImageOverlay(
+        overlay = folium.raster_layers.ImageOverlay(
             name="Zonas de risco alagamento",
             image=rgba,
             bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
@@ -125,8 +317,295 @@ class MunicipioService:
 
         # Plugins
 
-        # Mostrar coordenadas ao clicar
-        folium.LatLngPopup().add_to(m)
+        # Popup customizado: risco + uso do solo no ponto clicado
+        map_name = m.get_name()
+        overlay_name = overlay.get_name()
+        cidade_js = str(nome_cidade).replace("\\", "\\\\").replace("\"", "\\\"")
+
+        # Pesos iniciais: usar os mesmos pesos do AHP (pairwise) do config
+        cfg = load_config() or {}
+        p = cfg.get("pesos") if isinstance(cfg.get("pesos"), dict) else {}
+
+        uso_vs_declividade = float(p.get("uso_vs_declividade", 1 / 5))
+        uso_vs_fluxo = float(p.get("uso_vs_fluxo", 3))
+        uso_vs_hipsometria = float(p.get("uso_vs_hipsometria", 1 / 5))
+        declividade_vs_fluxo = float(p.get("declividade_vs_fluxo", 3))
+        declividade_vs_hipsometria = float(p.get("declividade_vs_hipsometria", 1))
+        fluxo_vs_hipsometria = float(p.get("fluxo_vs_hipsometria", 1 / 5))
+
+        pairwise = np.array(
+            [
+                uso_vs_declividade,
+                uso_vs_fluxo,
+                uso_vs_hipsometria,
+                declividade_vs_fluxo,
+                declividade_vs_hipsometria,
+                fluxo_vs_hipsometria,
+            ],
+            dtype=float,
+        )
+        if (not np.isfinite(pairwise).all()) or np.any(pairwise <= 0):
+            uso_vs_declividade = 1 / 5
+            uso_vs_fluxo = 3
+            uso_vs_hipsometria = 1 / 5
+            declividade_vs_fluxo = 3
+            declividade_vs_hipsometria = 1
+            fluxo_vs_hipsometria = 1 / 5
+
+        A = np.array(
+            [
+                [1, uso_vs_declividade, uso_vs_fluxo, uso_vs_hipsometria],
+                [1 / uso_vs_declividade, 1, declividade_vs_fluxo, declividade_vs_hipsometria],
+                [1 / uso_vs_fluxo, 1 / declividade_vs_fluxo, 1, fluxo_vs_hipsometria],
+                [1 / uso_vs_hipsometria, 1 / declividade_vs_hipsometria, 1 / fluxo_vs_hipsometria, 1],
+            ],
+            dtype=float,
+        )
+        vals, vecs = np.linalg.eig(A)
+        idx = np.argmax(vals.real)
+        w_init = vecs[:, idx].real
+        w_init = w_init / w_init.sum()
+        w_uso0, w_decl0, w_flux0, w_hipso0 = [float(x) for x in w_init]
+
+        # Layout final: sliders sempre "floating" dentro do mapa (Folium iframe)
+        sliders_layout = "floating"
+
+        sliders_inner_html = f"""
+            <div style="
+                width: 100%;
+                font-size: 13px;
+                background-color: white;
+                border: 2px solid grey;
+                border-radius: 6px;
+                padding: 10px;
+                box-shadow: 3px 3px 5px rgba(0,0,0,0.25);
+            ">
+                <b>Pesos (AHP simplificado)</b><br>
+                <div style=\"margin-top:6px;\">
+                    <label>Uso do solo: <span id=\"w_uso_val\">{w_uso0:.4g}</span></label>
+                    <div style=\"display:flex; gap:6px; align-items:center;\">
+                        <input id=\"w_uso\" type=\"range\" min=\"0\" max=\"1\" step=\"0.0001\" value=\"{w_uso0:.6f}\" style=\"flex:1;\" />
+                        <input id=\"w_uso_num\" type=\"number\" min=\"0\" max=\"1\" step=\"0.0001\" value=\"{w_uso0:.6f}\" style=\"width:82px;\" />
+                    </div>
+                </div>
+                <div>
+                    <label>Declividade: <span id=\"w_decl_val\">{w_decl0:.4g}</span></label>
+                    <div style=\"display:flex; gap:6px; align-items:center;\">
+                        <input id=\"w_decl\" type=\"range\" min=\"0\" max=\"1\" step=\"0.0001\" value=\"{w_decl0:.6f}\" style=\"flex:1;\" />
+                        <input id=\"w_decl_num\" type=\"number\" min=\"0\" max=\"1\" step=\"0.0001\" value=\"{w_decl0:.6f}\" style=\"width:82px;\" />
+                    </div>
+                </div>
+                <div>
+                    <label>Fluxo: <span id=\"w_flux_val\">{w_flux0:.4g}</span></label>
+                    <div style=\"display:flex; gap:6px; align-items:center;\">
+                        <input id=\"w_flux\" type=\"range\" min=\"0\" max=\"1\" step=\"0.0001\" value=\"{w_flux0:.6f}\" style=\"flex:1;\" />
+                        <input id=\"w_flux_num\" type=\"number\" min=\"0\" max=\"1\" step=\"0.0001\" value=\"{w_flux0:.6f}\" style=\"width:82px;\" />
+                    </div>
+                </div>
+                <div>
+                    <label>Hipsometria: <span id=\"w_hipso_val\">{w_hipso0:.4g}</span></label>
+                    <div style=\"display:flex; gap:6px; align-items:center;\">
+                        <input id=\"w_hipso\" type=\"range\" min=\"0\" max=\"1\" step=\"0.0001\" value=\"{w_hipso0:.6f}\" style=\"flex:1;\" />
+                        <input id=\"w_hipso_num\" type=\"number\" min=\"0\" max=\"1\" step=\"0.0001\" value=\"{w_hipso0:.6f}\" style=\"width:82px;\" />
+                    </div>
+                </div>
+                <div style=\"margin-top:8px; color:#444;\">
+                    <span id=\"w_status\">Arraste os sliders para atualizar o mapa</span>
+                </div>
+            </div>
+        """
+
+        sliders_template = f"""
+        {{% macro html(this, kwargs) %}}
+        <div style="
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 260px;
+            z-index: 9999;
+            font-size: 13px;
+            background-color: white;
+            border: 2px solid grey;
+            border-radius: 6px;
+            padding: 10px;
+            box-shadow: 3px 3px 5px rgba(0,0,0,0.25);
+        ">
+            {sliders_inner_html}
+        </div>
+        {{% endmacro %}}
+        """
+
+        sliders_macro = MacroElement()
+        sliders_macro._template = Template(sliders_template)
+        m.add_child(sliders_macro)
+
+        click_template = f"""
+        {{% macro script(this, kwargs) %}}
+        function _normW(raw) {{
+            if (!raw || raw.length !== 4) return [0.25, 0.25, 0.25, 0.25];
+            const clean = raw.map(v => (isFinite(v) && v >= 0) ? Number(v) : 0);
+            let sum = clean.reduce((a,b) => a + b, 0);
+            if (!isFinite(sum) || sum <= 0) sum = 1;
+            return clean.map(v => v / sum);
+        }}
+
+        // Pesos atuais (para o clique/popup e para sincronizar overlay)
+        window.__currentWeights = _normW([{w_uso0}, {w_decl0}, {w_flux0}, {w_hipso0}]);
+
+        function _fmt(v) {{
+            if (v === null || v === undefined) return '—';
+            if (typeof v === 'number') return (Math.round(v * 100) / 100).toString();
+            return v.toString();
+        }}
+
+        function _fmtSig(v) {{
+            if (!isFinite(v)) return '—';
+            // 4 algarismos significativos
+            const s = Number(v).toPrecision(4);
+            // Evitar notação científica quando dá para mostrar como decimal curto
+            const n = Number(s);
+            if (isFinite(n) && Math.abs(n) >= 0.001 && Math.abs(n) < 1000) return n.toString();
+            return s;
+        }}
+
+        function _getEl(id) {{ return document.getElementById(id); }}
+
+        function _readPair(s) {{
+            const num = _getEl(`w_${{s}}_num`);
+            const rng = _getEl(`w_${{s}}`);
+            const vNum = num ? parseFloat(num.value) : NaN;
+            const vRng = rng ? parseFloat(rng.value) : NaN;
+            return {{ num, rng, vNum, vRng }};
+        }}
+
+        function _readRawWeights(sourceId) {{
+            const ids = ['uso','decl','flux','hipso'];
+            const raw = ids.map(s => {{
+                const {{ num, rng, vNum, vRng }} = _readPair(s);
+
+                // Se o evento veio do range daquele peso...
+                if (sourceId === `w_${{s}}` && isFinite(vRng)) return vRng;
+                // Se o evento veio do numérico daquele peso...
+                if (sourceId === `w_${{s}}_num` && isFinite(vNum)) return vNum;
+
+                // Caso geral: preferir o elemento que está em foco
+                if (document.activeElement === rng && isFinite(vRng)) return vRng;
+                if (document.activeElement === num && isFinite(vNum)) return vNum;
+
+                // Fallback: preferir num se válido; senão range
+                if (isFinite(vNum)) return vNum;
+                if (isFinite(vRng)) return vRng;
+                return 0;
+            }});
+            return raw;
+        }}
+
+        function _syncInputs(raw, sourceId) {{
+            const ids = ['uso','decl','flux','hipso'];
+            ids.forEach((s, i) => {{
+                const v = raw[i];
+                const num = _getEl(`w_${{s}}_num`);
+                const rng = _getEl(`w_${{s}}`);
+
+                // Atualiza o campo oposto ao que disparou o evento
+                if (num && sourceId !== `w_${{s}}_num` && document.activeElement !== num) num.value = v.toFixed(6);
+                if (rng && sourceId !== `w_${{s}}` && document.activeElement !== rng) rng.value = v.toFixed(6);
+            }});
+        }}
+
+        function _getWeights() {{
+            const raw = _readRawWeights();
+            let sum = raw.reduce((a,b) => a + b, 0);
+            if (!isFinite(sum) || sum <= 0) sum = 1;
+            const w = raw.map(v => v / sum);
+            window.__currentWeights = w;
+            return w;
+        }}
+
+        function _renderWeights(w) {{
+            const el0 = document.getElementById('w_uso_val');
+            const el1 = document.getElementById('w_decl_val');
+            const el2 = document.getElementById('w_flux_val');
+            const el3 = document.getElementById('w_hipso_val');
+            if (el0) el0.textContent = _fmtSig(w[0]);
+            if (el1) el1.textContent = _fmtSig(w[1]);
+            if (el2) el2.textContent = _fmtSig(w[2]);
+            if (el3) el3.textContent = _fmtSig(w[3]);
+        }}
+
+        let _timer = null;
+        function _scheduleOverlayUpdate(sourceId) {{
+            const statusEl = document.getElementById('w_status');
+            const raw = _readRawWeights(sourceId);
+            _syncInputs(raw, sourceId);
+            let sum = raw.reduce((a,b) => a + b, 0);
+            if (!isFinite(sum) || sum <= 0) sum = 1;
+            const w = raw.map(v => v / sum);
+            _renderWeights(w);
+            if (_timer) clearTimeout(_timer);
+            _timer = setTimeout(() => {{
+                if (statusEl) statusEl.textContent = 'Atualizando...';
+                const url = `/overlay_risco?cidade=${{encodeURIComponent(\"{cidade_js}\")}}` +
+                            `&w_uso=${{w[0]}}&w_decl=${{w[1]}}&w_flux=${{w[2]}}&w_hipso=${{w[3]}}`;
+                fetch(url)
+                    .then(r => r.json())
+                    .then(data => {{
+                        if (data.status !== 'ok') {{
+                            if (statusEl) statusEl.textContent = data.mensagem || 'Falha ao atualizar.';
+                            return;
+                        }}
+                        {overlay_name}.setUrl(data.url);
+                        if (statusEl) statusEl.textContent = 'Atualizado';
+                    }})
+                    .catch(err => {{
+                        if (statusEl) statusEl.textContent = 'Erro: ' + err;
+                    }});
+            }}, 250);
+        }}
+
+        // Conecta sliders
+        ['w_uso','w_decl','w_flux','w_hipso','w_uso_num','w_decl_num','w_flux_num','w_hipso_num'].forEach(id => {{
+            const el = document.getElementById(id);
+            if (el) el.addEventListener('input', () => _scheduleOverlayUpdate(id));
+        }});
+        // Render inicial com maior precisão
+        _renderWeights(_getWeights());
+
+        {map_name}.on('click', function(e) {{
+            const lat = e.latlng.lat;
+            const lon = e.latlng.lng;
+            const w = _getWeights();
+            const url = `/valor_ponto?cidade=${{encodeURIComponent("{cidade_js}")}}&lat=${{lat}}&lon=${{lon}}` +
+                        `&w_uso=${{w[0]}}&w_decl=${{w[1]}}&w_flux=${{w[2]}}&w_hipso=${{w[3]}}`;
+
+            fetch(url)
+                .then(r => r.json())
+                .then(data => {{
+                    let html = `<b>Coordenadas</b><br>Lat: ${{lat.toFixed(5)}}<br>Lon: ${{lon.toFixed(5)}}`;
+
+                    if (data.status !== 'ok') {{
+                        html += `<br><br><b>Erro</b><br>${{data.mensagem || 'Falha ao consultar o ponto'}}`;
+                    }} else {{
+                        html += `<br><br><b>Risco</b>: ${{_fmt(data.risco)}}`;
+                        const usoClasse = data.uso_classe ? data.uso_classe : '—';
+                        html += `<br><b>Uso do solo</b>: ${{usoClasse}}`;
+                        html += `<br><b>Uso ID</b>: ${{_fmt(data.uso_id)}}`;
+                    }}
+
+                    L.popup().setLatLng(e.latlng).setContent(html).openOn({map_name});
+                }})
+                .catch(err => {{
+                    const html = `<b>Coordenadas</b><br>Lat: ${{lat.toFixed(5)}}<br>Lon: ${{lon.toFixed(5)}}` +
+                                 `<br><br><b>Erro</b><br>${{err}}`;
+                    L.popup().setLatLng(e.latlng).setContent(html).openOn({map_name});
+                }});
+        }});
+        {{% endmacro %}}
+        """
+
+        click_macro = MacroElement()
+        click_macro._template = Template(click_template)
+        m.add_child(click_macro)
 
         # Ferramenta de desenho (ponto e retângulo)
         Draw(
