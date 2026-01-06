@@ -74,20 +74,46 @@ def realizar_analise_de_fluxo(cidade: str):
 
         wbt = WhiteboxTools()
         wbt.verbose = False
+
+        # Importante: o executável do Whitebox costuma ficar dentro do site-packages em um caminho
+        # com acentos (ex.: Google Drive). Em macOS, isso pode causar falhas silenciosas.
+        # Copiamos o binário para o tmp_dir (ASCII) e apontamos o exe_path para lá.
+        try:
+            src_exe_dir = Path(str(wbt.exe_path))
+            src_exe = src_exe_dir / "whitebox_tools"
+            dst_exe = tmp_dir / "whitebox_tools"
+            if src_exe.exists() and not dst_exe.exists():
+                shutil.copyfile(src_exe, dst_exe)
+                dst_exe.chmod(0o755)
+            # WhiteboxTools usa exe_path como diretório onde está o binário.
+            if dst_exe.exists():
+                wbt.exe_path = str(tmp_dir)
+        except Exception:
+            # Se falhar, seguimos com o exe_path padrão.
+            pass
+
         wbt.work_dir = str(tmp_dir)
 
         # 1) Preencher depressões
         # Obs: alguns builds do Whitebox são mais confiáveis com caminhos relativos ao work_dir.
-        ret_fill = wbt.fill_depressions(dem="mde_nodata.tif", output="mde_filled.tif", fix_flats=True)
+        # Preferir caminhos absolutos para evitar escrita fora do tmp_dir.
+        ret_fill = wbt.fill_depressions(dem=str(tmp_mde_nodata), output=str(tmp_mde_filled), fix_flats=True)
+
+        # Fallback: alguns builds podem ignorar caminhos absolutos e escrever no work_dir.
+        if not tmp_mde_filled.exists():
+            alt = tmp_dir / "mde_filled.tif"
+            if alt.exists() and alt != tmp_mde_filled:
+                shutil.move(str(alt), str(tmp_mde_filled))
+
         if not tmp_mde_filled.exists():
             raise RuntimeError(
                 "Falha ao preencher depressões (Whitebox). O arquivo não foi criado em: "
                 + str(tmp_mde_filled)
-                + f" (ret={ret_fill})"
+                + f" (ret={ret_fill}). exe_path={getattr(wbt, 'exe_path', '')} work_dir={getattr(wbt, 'work_dir', '')}"
             )
 
         # 2) Fluxo acumulado (em número de células)
-        ret_acc = wbt.d8_flow_accumulation(i="mde_filled.tif", output="fluxo_acumulado.tif", out_type="cells")
+        ret_acc = wbt.d8_flow_accumulation(i=str(tmp_mde_filled), output=str(tmp_out_acc), out_type="cells")
 
         if not tmp_out_acc.exists():
             raise RuntimeError(
