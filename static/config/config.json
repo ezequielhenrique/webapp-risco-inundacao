@@ -10,6 +10,9 @@
             "estado": "dados/mde_pernambuco.tif"
         }
     },
+    "ui": {
+        "mostrar_ajustar_parametros": false
+    },
     "criterios": {
         "uso_do_solo": {
             "ativo": true,

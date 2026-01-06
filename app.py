@@ -277,6 +277,9 @@ def index():
     config = load_config() or {}
     lista_cidades = municipios.get_nome_cidades()
 
+    ui_cfg = config.get("ui") if isinstance(config.get("ui"), dict) else {}
+    mostrar_ajustar_parametros = bool((ui_cfg or {}).get("mostrar_ajustar_parametros", False))
+
     # Opcional: limitar a lista de cidades enquanto o MDE estadual não está disponível
     cidades_suportadas = config.get("cidades_suportadas")
     mde_estadual_existe = Path("dados/mde_pernambuco.tif").exists()
@@ -285,7 +288,13 @@ def index():
         lista_cidades = [c for c in lista_cidades if c in permitidas]
 
     mapa_html = municipios.gerar_mapa_base()
-    return render_template("index.html", cidade=None, lista_cidades=lista_cidades, mapa_html=mapa_html)
+    return render_template(
+        "index.html",
+        cidade=None,
+        lista_cidades=lista_cidades,
+        mapa_html=mapa_html,
+        mostrar_ajustar_parametros=mostrar_ajustar_parametros,
+    )
 
 
 @app.route("/executar_analise", methods=["POST"])

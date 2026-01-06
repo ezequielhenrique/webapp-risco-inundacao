@@ -17,32 +17,36 @@
             <button class="btn btn-primary" id="btn-executar">Executar análise</button>
         </div>
         
-        <div class="ajustar-parametros">
-            <button class="btn btn-secondary" onclick="openModal()">Ajustar parâmetros</button>
-        </div>
+        {% if mostrar_ajustar_parametros %}
+            <div class="ajustar-parametros">
+                <button class="btn btn-secondary" onclick="openModal()">Ajustar parâmetros</button>
+            </div>
+        {% endif %}
 
         <div id="loading"><span class="loader"></span> Processando análise...</div>
     </div>
 
-    <div id="configModal" class="modal">
-        <div class="modal-content">
-            <span class="close" onclick="closeModal()">&times;</span>
-            <h2 class="modal-title">Configurações</h2>
+    {% if mostrar_ajustar_parametros %}
+        <div id="configModal" class="modal">
+            <div class="modal-content">
+                <span class="close" onclick="closeModal()">&times;</span>
+                <h2 class="modal-title">Configurações</h2>
 
-            <form class="modal-form" method="POST" action="{{ url_for('config') }}">
+                <form class="modal-form" method="POST" action="{{ url_for('config') }}">
 
-                <p class="modal-subtitle">Pesos AHP</p>
-                <div id="criteriaContainer"></div>
+                    <p class="modal-subtitle">Pesos AHP</p>
+                    <div id="criteriaContainer"></div>
 
-                <p class="modal-subtitle">Classes</p>
-                <div id="classesContainer"></div>
+                    <p class="modal-subtitle">Classes</p>
+                    <div id="classesContainer"></div>
 
-                <br><br>
+                    <br><br>
 
-                <button class="btn btn-primary" type="submit">Salvar Configurações</button>
-            </form>
+                    <button class="btn btn-primary" type="submit">Salvar Configurações</button>
+                </form>
+            </div>
         </div>
-    </div>
+    {% endif %}
 
     <div id="mapa-container">
         {% if mapa_html %}
