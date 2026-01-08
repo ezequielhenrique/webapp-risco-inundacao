@@ -288,6 +288,12 @@ class MunicipioService:
             water_rgba[water_mask, 2] = 255  # B
             water_rgba[water_mask, 3] = 255  # A (opacity controlado pelo Leaflet)
 
+            water_group = folium.FeatureGroup(
+                name="Corpos d'água",
+                show=True,
+                overlay=True,
+                control=True,
+            )
             folium.raster_layers.ImageOverlay(
                 name="Corpos d'água",
                 image=water_rgba,
@@ -295,25 +301,103 @@ class MunicipioService:
                 opacity=0.55,
                 interactive=False,
                 cross_origin=False,
-            ).add_to(m)
-        except Exception:
+            ).add_to(water_group)
+            water_group.add_to(m)
+        except Exception as e:
             # Se faltar o raster de uso do solo ou der erro de reprojeção, apenas não desenha o overlay.
+            print(f"Erro ao carregar camadas de uso/água: {e}")
             pass
+
+        # Camada de mancha de inundação (HEC-RAS)
+        mancha_group = folium.FeatureGroup(
+            name="Mancha de inundação (HEC-RAS)",
+            show=False,
+            overlay=True,
+            control=True,
+        )
+        try:
+            mancha_path = "dados/manchas-inundacao-normalizado.tif"
+            from pathlib import Path
+            if Path(mancha_path).exists():
+                with rasterio.open(mancha_path) as mancha_src:
+                    # Ler dados da mancha
+                    mancha_data = mancha_src.read(1).astype(np.float32)
+                    mancha_nodata = mancha_src.nodata
+
+                    # Calcular transformação para EPSG:4326 com as mesmas dimensões do grid de risco
+                    mancha_transform, mancha_w, mancha_h = calculate_default_transform(
+                        mancha_src.crs, "EPSG:4326", mancha_src.width, mancha_src.height, *mancha_src.bounds
+                    )
+
+                    # Reprojetar mancha para o mesmo grid do overlay de risco (EPSG:4326)
+                    # Importante: manter float para não truncar rasters normalizados (0..1) ao converter para uint8
+                    mancha_reproj = np.full((height, width), 0.0, dtype=np.float32)
+                    reproject(
+                        source=mancha_data.astype(np.float32),
+                        destination=mancha_reproj,
+                        src_transform=mancha_src.transform,
+                        src_crs=mancha_src.crs,
+                        dst_transform=transform,
+                        dst_crs="EPSG:4326",
+                        resampling=Resampling.nearest,
+                        src_nodata=float(mancha_nodata)
+                        if (mancha_nodata is not None and np.isfinite(mancha_nodata))
+                        else 0.0,
+                        dst_nodata=0.0,
+                    )
+
+                    # Converter para RGBA: azul semi-transparente onde houver inundação
+                    mancha_rgba = np.zeros((height, width, 4), dtype=np.uint8)
+                    # Onde mancha_reproj > 0 (inundação), colorir em azul
+                    # (limiar pequeno para evitar problemas numéricos/ruído)
+                    flood_mask = mancha_reproj > 1e-6
+                    mancha_rgba[flood_mask, 0] = 0      # R
+                    mancha_rgba[flood_mask, 1] = 100    # G
+                    mancha_rgba[flood_mask, 2] = 200    # B
+                    # Alpha total no pixel; a transparência final fica controlada pelo parâmetro opacity do overlay
+                    mancha_rgba[flood_mask, 3] = 255
+
+                    folium.raster_layers.ImageOverlay(
+                        name="Mancha de inundação (HEC-RAS)",
+                        image=mancha_rgba,
+                        bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
+                        opacity=0.8,
+                        interactive=False,
+                        cross_origin=False,
+                    ).add_to(mancha_group)
+        except Exception as e:
+            # Se faltar a mancha ou der erro, apenas não desenha
+            print(f"Erro ao carregar camada HEC-RAS: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Sempre adicionar o grupo ao mapa, mesmo se vazio, para aparecer no LayerControl
+        mancha_group.add_to(m)
 
         # Converter para imagem normalizada (0-255) para overlay
         norm_data = (data - data.min()) / (data.max() - data.min())
         rgba = plt.cm.RdYlGn_r(norm_data)  # colormap matplotlib
         rgba = (rgba[:, :, :4] * 255).astype(np.uint8)  # converter para 0-255
 
-        # Adicionar ao mapa
-        overlay = folium.raster_layers.ImageOverlay(
+        # Adicionar ao mapa dentro de um FeatureGroup para que apareça no LayerControl
+        risco_group = folium.FeatureGroup(
+            name="Zonas de risco alagamento",
+            show=True,
+            overlay=True,
+            control=True,
+        )
+        risco_overlay = folium.raster_layers.ImageOverlay(
             name="Zonas de risco alagamento",
             image=rgba,
             bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
             opacity=0.6,
             interactive=True,
             cross_origin=False
-        ).add_to(m)
+        ).add_to(risco_group)
+        risco_group.add_to(m)
+
+        # Importante: o JS de atualização usa setUrl(), que existe no ImageOverlay (não no FeatureGroup)
+        overlay = risco_overlay
 
         # Plugins
 
@@ -625,6 +709,9 @@ class MunicipioService:
                         const usoClasse = data.uso_classe ? data.uso_classe : '—';
                         html += `<br><b>Uso do solo</b>: ${{usoClasse}}`;
                         html += `<br><b>Uso ID</b>: ${{_fmt(data.uso_id)}}`;
+                            html += `<br><b>Declividade (°)</b>: ${{_fmt(data.declividade)}}`;
+                            html += `<br><b>Elevação (m)</b>: ${{_fmt(data.elevacao)}}`;
+                            html += `<br><b>Fluxo acumulado</b>: ${{_fmt(data.fluxo_acumulado)}}`;
                     }}
 
                     L.popup().setLatLng(e.latlng).setContent(html).openOn({map_name});
@@ -702,7 +789,8 @@ class MunicipioService:
                     icon=folium.Icon(color="red", icon="info-sign"),
                 ).add_to(m)
 
-        folium.LayerControl().add_to(m)
+        # Mostrar a lista expandida para destacar todas as camadas (incluindo HEC-RAS)
+        folium.LayerControl(position="topright", collapsed=False, sortLayers=True).add_to(m)
 
         m.add_child(macro)
 

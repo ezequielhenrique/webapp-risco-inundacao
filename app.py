@@ -295,6 +295,7 @@ def index():
 
     ui_cfg = config.get("ui") if isinstance(config.get("ui"), dict) else {}
     mostrar_ajustar_parametros = bool((ui_cfg or {}).get("mostrar_ajustar_parametros", False))
+    cidade_padrao = (ui_cfg or {}).get("cidade_padrao")
 
     # Opcional: limitar a lista de cidades enquanto o MDE estadual não está disponível
     cidades_suportadas = config.get("cidades_suportadas")
@@ -303,10 +304,31 @@ def index():
         permitidas = set(cidades_suportadas)
         lista_cidades = [c for c in lista_cidades if c in permitidas]
 
-    mapa_html = municipios.gerar_mapa_base()
+    # Se houver cidade_padrao definida, carrega a análise automaticamente
+    cidade_atual = None
+    if cidade_padrao and isinstance(cidade_padrao, str):
+        cidade_padrao_normalizada = _slug_cidade(cidade_padrao)
+        # Verifica se a cidade existe na lista
+        if any(_slug_cidade(c) == cidade_padrao_normalizada for c in lista_cidades):
+            try:
+                analise_multicriterio = AnaliseService()
+                raster_risco_path = analise_multicriterio.executar(
+                    cidade_padrao, municipios.get_gdf_municipio(cidade_padrao)
+                )
+                mapa_html = municipios.gerar_mapa_municipio(cidade_padrao, raster_risco_path)
+                cidade_atual = cidade_padrao
+            except Exception as e:
+                # Fallback para mapa base se houver erro
+                print(f"Erro ao carregar cidade padrão: {e}")
+                mapa_html = municipios.gerar_mapa_base()
+        else:
+            mapa_html = municipios.gerar_mapa_base()
+    else:
+        mapa_html = municipios.gerar_mapa_base()
+
     return render_template(
         "index.html",
-        cidade=None,
+        cidade=cidade_atual,
         lista_cidades=lista_cidades,
         mapa_html=mapa_html,
         mostrar_ajustar_parametros=mostrar_ajustar_parametros,
@@ -389,6 +411,9 @@ def valor_ponto():
 
     risco_path = Path(f"outputs/mapas_de_risco/risco_alagamento_{slug}_recortado.tif")
     uso_path = Path(f"outputs/uso_do_solo/uso_do_solo_{slug}.tif")
+    decl_path = Path(f"outputs/declividade/declividade_{slug}.tif")
+    fluxo_path = Path(f"outputs/fluxo_acumulado/fluxo_acumulado_{slug}.tif")
+    mde_path = Path(f"outputs/mde/mde_{slug}.tif")
 
     if not risco_path.exists():
         return (
@@ -412,6 +437,9 @@ def valor_ponto():
             risco_val = _sample_raster_epsg4326(risco_path, lon=lon, lat=lat)
 
         uso_val = _sample_raster_epsg4326(uso_path, lon=lon, lat=lat)
+        decl_val = _sample_raster_epsg4326(decl_path, lon=lon, lat=lat) if decl_path.exists() else None
+        fluxo_val = _sample_raster_epsg4326(fluxo_path, lon=lon, lat=lat) if fluxo_path.exists() else None
+        mde_val = _sample_raster_epsg4326(mde_path, lon=lon, lat=lat) if mde_path.exists() else None
 
         risco_out = None if risco_val is None else float(risco_val)
         uso_id = None if uso_val is None else int(uso_val)
@@ -427,6 +455,9 @@ def valor_ponto():
                 "w": None if w is None else w.tolist(),
                 "uso_id": uso_id,
                 "uso_classe": uso_label,
+                "declividade": None if decl_val is None else float(decl_val),
+                "fluxo_acumulado": None if fluxo_val is None else float(fluxo_val),
+                "elevacao": None if mde_val is None else float(mde_val),
             }
         )
     except Exception as e:

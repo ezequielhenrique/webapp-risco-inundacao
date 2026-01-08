@@ -11,7 +11,8 @@
         }
     },
     "ui": {
-        "mostrar_ajustar_parametros": false
+        "mostrar_ajustar_parametros": false,
+        "cidade_padrao": "Recife"
     },
     "criterios": {
         "uso_do_solo": {
