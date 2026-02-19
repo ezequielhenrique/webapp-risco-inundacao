@@ -83,15 +83,53 @@ Se este arquivo não existir e o critério estiver `ativo`, a análise falhará.
 O arquivo `static/config/config.json` controla:
 
 - `cidades_suportadas`: allowlist de cidades (útil quando não há MDE estadual disponível)
+- `visualizacao.tipo_risco`: escolhe entre `"continuo"` (escala suave) ou `"classes_4"` (4 classes discretas)
 - `criterios.*.ativo`: liga/desliga cada critério
 - Classes de reclassificação:
   - `criterios.declividade.classes` (intervalar)
   - `criterios.fluxo_acumulado.classes` (intervalar)
-  - `criterios.hipsometria.classes` (intervalar)
+  - `criterios.hipsometria.classes` (intervalar → **dinâmico para municípios além de Recife**)
   - `criterios.uso_do_solo.classes` (categórico por IDs)
 - Comparações par-a-par do AHP em `pesos.*` (ex.: `uso_vs_fluxo`, `declividade_vs_hipsometria`, etc.)
 
 A rota `/config` salva alterações de configuração (weights/classes) e redireciona para a página inicial.
+
+### Hipsometria dinâmica (Cury et al. 2021)
+
+Para **Recife**: As classes de hipsometria são fixas (`0-3m`, `3-10m`, `10-50m`, `>50m`) conforme configurado.
+
+Para **outros municípios** (ex.: Belo Jardim): As classes são calculadas automaticamente pelo método de **intervalos iguais**:
+
+$$\text{intervalo} = \frac{\text{max\_altitude} - \text{min\_altitude}}{4}$$
+
+Exemplo (Belo Jardim, altitude 50-500m):
+- Classe 1: 50–162,5m → valor 4 (risco mais alto)
+- Classe 2: 162,5–275m → valor 3
+- Classe 3: 275–387,5m → valor 2
+- Classe 4: 387,5–∞m → valor 1 (risco mais baixo)
+
+Isso garante que cada município tenha classes apropriadas à sua topografia, mantendo o AHP e pesos globais idênticos.
+
+### Visualização em 4 classes de risco
+
+Mude `visualizacao.tipo_risco` para escolher o modo de exibição:
+
+```json
+"visualizacao": {
+    "tipo_risco": "classes_4"
+}
+```
+
+- **`"continuo"`** (padrão): Escala de cores suave (verde → amarelo → vermelho) com gradiente contínuo
+- **`"classes_4"`**: Risco dividido em 4 classes discretas de **igual tamanho**:
+  - Classe 1 (0–25%): Verde escuro → Risco baixo
+  - Classe 2 (25–50%): Amarelo → Risco moderado
+  - Classe 3 (50–75%): Laranja → Risco alto
+  - Classe 4 (75–100%): Vermelho → Risco muito alto
+
+A mudança aplica-se imediatamente ao mapa inicial e aos overlays dinâmicos (quando ajusta pesos).
+
+
 
 ## Rotas principais (API)
 
@@ -100,7 +138,8 @@ A rota `/config` salva alterações de configuração (weights/classes) e redire
 - `GET /valor_ponto?cidade=...&lat=...&lon=...` — Consulta risco/uso do solo em um ponto
   - Opcional: pesos dinâmicos `w_uso`, `w_decl`, `w_flux`, `w_hipso` (normalizados internamente)
 - `GET /overlay_risco?cidade=...&w_uso=...&w_decl=...&w_flux=...&w_hipso=...` — Retorna um PNG (data-url) do overlay de risco recalculado com pesos
-- `GET /sobre` — Página “Sobre”
+  - Respeita a configuração `visualizacao.tipo_risco` (contínuo ou 4 classes)
+- `GET /sobre` — Página "Sobre"
 
 ## Saídas geradas
 
@@ -117,8 +156,27 @@ A análise cria arquivos em `outputs/`:
 
 ## Observações e troubleshooting
 
+- **Hipsometria dinâmica**: Quando analisar um novo município além de Recife, as classes de altitude são geradas automaticamente usando min/max do MDE. Isso garante adaptação a diferentes topografias.
+- **Visualização em 4 classes**: A mudança de `tipo_risco` é instantânea. Não é necessário re-executar a análise, apenas recarregar o navegador.
 - **Whitebox/fluxo acumulado**: o cálculo usa `whitebox` (WhiteboxTools). Em macOS/Google Drive e caminhos com caracteres Unicode, a rotina roda o Whitebox em um diretório temporário (ASCII) e copia o resultado para `outputs/`.
-- Se o resultado ficar “estranho”, uma limpeza comum é remover rasters antigos em `outputs/` da cidade e rodar novamente.
+- Se o resultado ficar "estranho", uma limpeza comum é remover rasters antigos em `outputs/` da cidade e rodar novamente.
+
+## Testar as novas funcionalidades
+
+### Testar classificação em 4 classes de risco
+
+1. Abra `static/config/config.json`
+2. Mude `"tipo_risco": "continuo"` para `"tipo_risco": "classes_4"`
+3. Recarregue o navegador
+4. O mapa deve exibir agora 4 cores discretas (verde, amarelo, laranja, vermelho)
+5. Ajuste um peso para confirmar que o overlay também usa 4 classes
+
+### Testar hipsometria dinâmica (apenas para municípios além de Recife)
+
+1. Certifique-se de ter um MDE para o novo município (ex.: `dados/mde_belo-jardim.tif`)
+2. Execute a análise para o município
+3. Verifique em `outputs/hipsometria/hipsometria_<municipio>_reclass.tif` que as classes foram reclassificadas automaticamente
+4. Os valores de altitude devem variar conforme o relevo local (não fixo como em Recife)
 
 ## Licença / autoria
 

@@ -14,6 +14,9 @@
         "mostrar_ajustar_parametros": false,
         "cidade_padrao": "Recife"
     },
+    "visualizacao": {
+        "tipo_risco": "classes_4"
+    },
     "criterios": {
         "uso_do_solo": {
             "ativo": true,

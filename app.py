@@ -4,8 +4,10 @@ from typing import Any
 import base64
 import io
 
+import geopandas as gpd
 import numpy as np
 import rasterio
+from shapely.geometry import Point
 from rasterio.mask import mask
 from rasterio.warp import transform as rio_transform
 from rasterio.warp import calculate_default_transform, reproject, Resampling
@@ -18,6 +20,7 @@ from utils.utils import load_config, save_config
 
 
 _CITY_COLOR_SCALE: dict[str, tuple[float, float]] = {}
+_BAIRROS_GDF: gpd.GeoDataFrame | None = None
 
 
 def _get_city_color_scale(slug: str) -> tuple[float, float]:
@@ -73,6 +76,59 @@ def _uso_do_solo_label(uso_id: int | None, config: dict[str, Any]) -> str | None
         if isinstance(ids, list) and uso_id in ids:
             return str(nome_classe)
     return None
+
+
+def _get_bairros_gdf() -> gpd.GeoDataFrame | None:
+    global _BAIRROS_GDF
+    if _BAIRROS_GDF is not None:
+        return _BAIRROS_GDF
+
+    bairros_shp = Path("dados/Bairros-Recife/Bairros.shp")
+    if not bairros_shp.exists():
+        _BAIRROS_GDF = None
+        return None
+
+    gdf = gpd.read_file(bairros_shp)
+    if gdf.crs is None:
+        gdf = gdf.set_crs(epsg=31985)
+    if str(gdf.crs).upper() != "EPSG:4326":
+        gdf = gdf.to_crs(epsg=4326)
+
+    if "EBAIRRNOME" in gdf.columns:
+        gdf["__bairro__"] = gdf["EBAIRRNOME"]
+    elif "BAIRRO" in gdf.columns:
+        gdf["__bairro__"] = gdf["BAIRRO"]
+    elif "NOME" in gdf.columns:
+        gdf["__bairro__"] = gdf["NOME"]
+    else:
+        gdf["__bairro__"] = None
+
+    _BAIRROS_GDF = gdf
+    return gdf
+
+
+def _bairro_from_point(lat: float, lon: float) -> str | None:
+    gdf = _get_bairros_gdf()
+    if gdf is None or gdf.empty:
+        return None
+
+    pt = Point(lon, lat)
+    try:
+        hits = list(gdf.sindex.intersection((lon, lat, lon, lat)))
+        subset = gdf.iloc[hits] if hits else gdf
+    except Exception:
+        subset = gdf
+
+    matches = subset[subset.geometry.contains(pt)]
+    if matches.empty:
+        matches = subset[subset.geometry.intersects(pt)]
+    if matches.empty:
+        return None
+
+    bairro = matches.iloc[0].get("__bairro__")
+    if bairro is None:
+        return None
+    return str(bairro)
 
 
 def _sample_raster_epsg4326(path: Path, lon: float, lat: float) -> float | int | None:
@@ -167,6 +223,11 @@ def _risk_overlay_png_data_url(slug: str, w: np.ndarray) -> str:
             "Arquivos reclassificados ausentes (execute a análise da cidade primeiro): " + ", ".join(missing)
         )
 
+    # Determinar tipo de visualização a partir da config
+    config = load_config() or {}
+    tipo_risco = ((config.get("visualizacao") or {}).get("tipo_risco") or "continuo").lower()
+    usar_classes_4 = tipo_risco == "classes_4"
+
     # 1) Recalcular risco no mesmo grid dos rasters reclassificados
     with rasterio.open(uso_reclass) as s0, rasterio.open(decl_reclass) as s1, rasterio.open(fluxo_reclass) as s2, rasterio.open(hipso_reclass) as s3:
         uso = s0.read(1).astype(np.float32)
@@ -249,8 +310,29 @@ def _risk_overlay_png_data_url(slug: str, w: np.ndarray) -> str:
         if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax == vmin:
             norm_data = np.zeros_like(dst, dtype=np.float32)
         else:
-            norm_data = (dst - vmin) / (vmax - vmin)
-            norm_data = np.clip(norm_data, 0.0, 1.0)
+            if usar_classes_4:
+                # Reclassificar em 4 classes discretas baseadas nos percentis do intervalo [vmin, vmax]
+                intervalo = (vmax - vmin) / 4.0
+                norm_data = np.zeros_like(dst, dtype=np.float32)
+                
+                # Classe 1: vmin a vmin + 1*intervalo → valor 0.125 (verde-escuro)
+                # Classe 2: vmin + 1*intervalo a vmin + 2*intervalo → valor 0.375 (amarelo)
+                # Classe 3: vmin + 2*intervalo a vmin + 3*intervalo → valor 0.625 (laranja)
+                # Classe 4: vmin + 3*intervalo a vmax → valor 0.875 (vermelho)
+                
+                mask1 = valid & (dst >= vmin) & (dst < vmin + intervalo)
+                mask2 = valid & (dst >= vmin + intervalo) & (dst < vmin + 2*intervalo)
+                mask3 = valid & (dst >= vmin + 2*intervalo) & (dst < vmin + 3*intervalo)
+                mask4 = valid & (dst >= vmin + 3*intervalo)
+                
+                norm_data[mask1] = 0.125  # Classe 1 (menor risco)
+                norm_data[mask2] = 0.375  # Classe 2
+                norm_data[mask3] = 0.625  # Classe 3
+                norm_data[mask4] = 0.875  # Classe 4 (maior risco)
+            else:
+                # Modo contínuo: normalização linear
+                norm_data = (dst - vmin) / (vmax - vmin)
+                norm_data = np.clip(norm_data, 0.0, 1.0)
 
         rgba = cm.get_cmap("RdYlGn_r")(norm_data)
         # Alpha total deve ser controlado pelo `opacity` do Leaflet (ImageOverlay).
@@ -445,12 +527,17 @@ def valor_ponto():
         uso_id = None if uso_val is None else int(uso_val)
         uso_label = _uso_do_solo_label(uso_id, config)
 
+        bairro = None
+        if slug == "recife":
+            bairro = _bairro_from_point(lat=lat, lon=lon)
+
         return jsonify(
             {
                 "status": "ok",
                 "cidade": cidade,
                 "lat": lat,
                 "lon": lon,
+                "bairro": bairro,
                 "risco": risco_out,
                 "w": None if w is None else w.tolist(),
                 "uso_id": uso_id,

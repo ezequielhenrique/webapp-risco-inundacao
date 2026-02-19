@@ -1,4 +1,6 @@
 import geopandas as gpd
+import json
+from pathlib import Path
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 from rasterio.mask import mask
 from branca.element import Template, MacroElement
@@ -81,6 +83,68 @@ class MunicipioService:
                 'fillOpacity': 0
             }
         ).add_to(m)
+
+        # Centroides por bairro (Defesa Civil) - apenas Recife por enquanto
+        if nome_cidade.strip().lower() == "recife":
+            bairros_path = Path("outputs/bairros_alagamento_recife.json")
+            if bairros_path.exists():
+                try:
+                    with bairros_path.open("r", encoding="utf-8") as f:
+                        bairros = json.load(f)
+                    if isinstance(bairros, list) and bairros:
+                        bairros_group = folium.FeatureGroup(
+                            name="Chamados por bairro (Defesa Civil)",
+                            show=True,
+                            overlay=True,
+                            control=True,
+                        )
+                        for item in bairros:
+                            try:
+                                lat = float(item.get("lat"))
+                                lon = float(item.get("lon"))
+                            except Exception:
+                                continue
+                            nome = str(item.get("bairro", "")).strip()
+                            chamados = item.get("chamados")
+                            pct_mod_alto = item.get("pct_area_mod_alto")
+                            pct_alto = item.get("pct_area_alto")
+                            area_km2 = item.get("area_km2")
+
+                            linhas = []
+                            if nome:
+                                linhas.append(f"<b>Bairro</b>: {nome}")
+                            if chamados is not None:
+                                linhas.append(f"<b>Chamados</b>: {chamados}")
+                            if pct_mod_alto is not None:
+                                linhas.append(f"<b>% area risco >=2</b>: {pct_mod_alto:.1f}%")
+                            if pct_alto is not None:
+                                linhas.append(f"<b>% area risco >=3</b>: {pct_alto:.1f}%")
+                            if area_km2 is not None:
+                                linhas.append(f"<b>Area (km2)</b>: {area_km2:.2f}")
+                            popup_txt = "<br>".join(linhas) if linhas else "Bairro"
+
+                            # Raio proporcional ao numero de chamados (escala suave)
+                            try:
+                                chamados_val = float(chamados) if chamados is not None else 0.0
+                            except Exception:
+                                chamados_val = 0.0
+                            if chamados_val <= 0:
+                                continue
+                            radius = 4.0 + min(20.0, np.sqrt(max(chamados_val, 0.0)) * 2.0)
+
+                            folium.CircleMarker(
+                                location=[lat, lon],
+                                radius=radius,
+                                color="#d73027",
+                                fill_color="#d73027",
+                                fill=True,
+                                fill_opacity=1,
+                                #fill_opacity=0.5,
+                                popup=popup_txt,
+                            ).add_to(bairros_group)
+                        bairros_group.add_to(m)
+                except Exception as e:
+                    print(f"Erro ao carregar bairros agregados: {e}")
 
         # Raster overlay
         with rasterio.open(raster_path) as src:
@@ -317,7 +381,6 @@ class MunicipioService:
         )
         try:
             mancha_path = "dados/manchas-inundacao-normalizado.tif"
-            from pathlib import Path
             if Path(mancha_path).exists():
                 with rasterio.open(mancha_path) as mancha_src:
                     # Ler dados da mancha
@@ -375,7 +438,34 @@ class MunicipioService:
         mancha_group.add_to(m)
 
         # Converter para imagem normalizada (0-255) para overlay
-        norm_data = (data - data.min()) / (data.max() - data.min())
+        # Verificar se deve usar classes discretas (4 classes) ou contínuo
+        config = load_config() or {}
+        tipo_risco = ((config.get("visualizacao") or {}).get("tipo_risco") or "continuo").lower()
+        usar_classes_4 = tipo_risco == "classes_4"
+        
+        if usar_classes_4:
+            # Reclassificar em 4 classes discretas baseadas no intervalo [vmin, vmax]
+            vmin = data.min()
+            vmax = data.max()
+            if vmin < vmax:
+                intervalo = (vmax - vmin) / 4.0
+                norm_data = np.zeros_like(data, dtype=np.float32)
+                
+                mask1 = (data >= vmin) & (data < vmin + intervalo)
+                mask2 = (data >= vmin + intervalo) & (data < vmin + 2*intervalo)
+                mask3 = (data >= vmin + 2*intervalo) & (data < vmin + 3*intervalo)
+                mask4 = (data >= vmin + 3*intervalo)
+                
+                norm_data[mask1] = 0.125  # Classe 1 (menor risco)
+                norm_data[mask2] = 0.375  # Classe 2
+                norm_data[mask3] = 0.625  # Classe 3
+                norm_data[mask4] = 0.875  # Classe 4 (maior risco)
+            else:
+                norm_data = np.zeros_like(data, dtype=np.float32)
+        else:
+            # Modo contínuo: normalização linear
+            norm_data = (data - data.min()) / (data.max() - data.min())
+        
         rgba = plt.cm.RdYlGn_r(norm_data)  # colormap matplotlib
         rgba = (rgba[:, :, :4] * 255).astype(np.uint8)  # converter para 0-255
 
@@ -391,7 +481,7 @@ class MunicipioService:
             image=rgba,
             bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
             opacity=0.6,
-            interactive=True,
+            interactive=False,
             cross_origin=False
         ).add_to(risco_group)
         risco_group.add_to(m)
@@ -705,6 +795,9 @@ class MunicipioService:
                     if (data.status !== 'ok') {{
                         html += `<br><br><b>Erro</b><br>${{data.mensagem || 'Falha ao consultar o ponto'}}`;
                     }} else {{
+                        if (data.bairro) {{
+                            html += `<br><b>Bairro</b>: ${{data.bairro}}`;
+                        }}
                         html += `<br><br><b>Risco</b>: ${{_fmt(data.risco)}}`;
                         const usoClasse = data.uso_classe ? data.uso_classe : '—';
                         html += `<br><b>Uso do solo</b>: ${{usoClasse}}`;
@@ -788,6 +881,46 @@ class MunicipioService:
                     popup=folium.Popup(endereco, max_width=300),
                     icon=folium.Icon(color="red", icon="info-sign"),
                 ).add_to(m)
+
+        # Fronteiras dos bairros (Recife) - adicionar por ultimo para ficar acima do raster
+        if nome_cidade.strip().lower() == "recife":
+            try:
+                bairros_shp = Path("dados/Bairros-Recife/Bairros.shp")
+                if bairros_shp.exists():
+                    gdf_bairros = gpd.read_file(bairros_shp)
+                    if gdf_bairros.crs is None:
+                        # CRS conhecido do arquivo (SIRGAS 2000 / UTM 25S)
+                        gdf_bairros = gdf_bairros.set_crs(epsg=31985)
+                    if str(gdf_bairros.crs).upper() != "EPSG:4326":
+                        gdf_bairros = gdf_bairros.to_crs(epsg=4326)
+
+                    print(f"Bairros carregados: {len(gdf_bairros)}")
+
+                    # Evitar erro de serializacao: converter campos datetime para string
+                    for col, dtype in gdf_bairros.dtypes.items():
+                        if "datetime" in str(dtype):
+                            gdf_bairros[col] = gdf_bairros[col].astype(str)
+
+                    bairros_group = folium.FeatureGroup(
+                        name="Fronteira dos bairros",
+                        show=True,
+                        overlay=True,
+                        control=True,
+                    )
+                    folium.GeoJson(
+                        gdf_bairros,
+                        name="Fronteira dos bairros",
+                        style_function=lambda x: {
+                            "fillColor": "#000000",
+                            "color": "#1f78b4",
+                            "weight": 2,
+                            "opacity": 1.0,
+                            "fillOpacity": 0.0,
+                        },
+                    ).add_to(bairros_group)
+                    bairros_group.add_to(m)
+            except Exception as e:
+                print(f"Erro ao carregar fronteiras de bairros: {e}")
 
         # Mostrar a lista expandida para destacar todas as camadas (incluindo HEC-RAS)
         folium.LayerControl(position="topright", collapsed=False, sortLayers=True).add_to(m)

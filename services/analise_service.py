@@ -53,10 +53,15 @@ class AnaliseService:
             )
         
         if config["criterios"]["hipsometria"]["ativo"]:
+            # Se for Recife, usar classes hardcoded; senão calcular dinamicamente
+            ipso_classes = self._calcular_classes_hipsometria(
+                f"outputs/mde/mde_{self.cidade}.tif",
+                config["criterios"]["hipsometria"].get("classes", [])
+            )
             self._reclassificar_raster(
                 f"outputs/mde/mde_{self.cidade}.tif",
                 f"outputs/hipsometria/hipsometria_{self.cidade}_reclass.tif",
-                config["criterios"]["hipsometria"]["classes"],
+                ipso_classes,
             )
 
         pesos, cr = self._calcular_pesos(config)
@@ -348,6 +353,88 @@ class AnaliseService:
                         dst_crs=moldura_crs,
                         resampling=Resampling.nearest
                     )
+    
+    def _calcular_classes_hipsometria(self, mde_path: str, config_classes: list | None = None) -> list:
+        """Calcula classes de hipsometria (altitude) dinamicamente.
+        
+        Metodologia Cury et al. (2021): Para cada município, divide a faixa altimétrica (min-max)
+        em intervalos iguais.
+        
+        Para Recife (caso especial): Usa as classes hardcoded da config.
+        Para outros municípios: Calcula automaticamente 4 intervalos iguais.
+        
+        Args:
+            mde_path: Caminho para o raster do MDE relativo à moldura municipal
+            config_classes: Classes configuradas (usadas para Recife)
+        
+        Returns:
+            Lista com dicts contendo {min, max, valor} no formato esperado por _reclassificar_raster
+        """
+        
+        # Se for Recife, usar as classes da config (hardcoded específicas da cidade)
+        if self.cidade == "recife":
+            if config_classes and isinstance(config_classes, list) and len(config_classes) > 0:
+                return config_classes
+            # Fallback: usar padrão Recife mesmo se não estiver em config
+            return [
+                {"min": 0.0, "max": 3.0, "valor": 4.0},
+                {"min": 3.0, "max": 10.0, "valor": 3.0},
+                {"min": 10.0, "max": 50.0, "valor": 2.0},
+                {"min": 50.0, "max": None, "valor": 1.0},
+            ]
+        
+        # Para outros municípios: calcular intervalos iguais
+        with rasterio.open(mde_path) as src:
+            data = src.read(1)
+            src_nodata = src.nodata
+        
+        # Máscara de dados válidos
+        valid = np.isfinite(data)
+        if src_nodata is not None and np.isfinite(src_nodata):
+            valid &= data != src_nodata
+        
+        if not np.any(valid):
+            # Se não houver dados válidos, retornar padrão genérico
+            return [
+                {"min": 0.0, "max": 25.0, "valor": 4.0},
+                {"min": 25.0, "max": 50.0, "valor": 3.0},
+                {"min": 50.0, "max": 100.0, "valor": 2.0},
+                {"min": 100.0, "max": None, "valor": 1.0},
+            ]
+        
+        # Extrair min/max de dados válidos
+        min_alt = float(np.nanmin(data[valid]))
+        max_alt = float(np.nanmax(data[valid]))
+        
+        # Evitar divisão por zero
+        if min_alt >= max_alt:
+            min_alt = 0.0
+            max_alt = 1.0
+        
+        # Calcular intervalo igual (metodologia Cury et al. 2021)
+        n_classes = 4
+        intervalo = (max_alt - min_alt) / n_classes
+        
+        classes = []
+        for i in range(n_classes):
+            cls_min = min_alt + (i * intervalo)
+            cls_max = min_alt + ((i + 1) * intervalo)
+            
+            # Última classe: sem limite máximo (None)
+            if i == n_classes - 1:
+                cls_max = None
+            
+            # Valor de reclassificação: 4 para mais baixo, 1 para mais alto
+            # (inversamente correlacionado com altitude para risco de inundação)
+            valor = float(n_classes - i)
+            
+            classes.append({
+                "min": cls_min,
+                "max": cls_max,
+                "valor": valor,
+            })
+        
+        return classes
     
     def _pesos_metodo_ahp(self, pairwise):
         A = np.array(pairwise, dtype=float)
