@@ -8,6 +8,7 @@ import rasterio
 from folium.plugins import Draw, MousePosition
 import folium
 import matplotlib.pyplot as plt
+from matplotlib import colors as mcolors
 import numpy as np
 
 from utils.utils import load_config
@@ -76,6 +77,7 @@ class MunicipioService:
         folium.GeoJson(
             gdf,
             name="Limite do Município",
+            control=False, # Não mostrar no LayerControl
             style_function=lambda x: {
                 'fillColor': 'yellow',
                 'color': 'green',
@@ -83,68 +85,6 @@ class MunicipioService:
                 'fillOpacity': 0
             }
         ).add_to(m)
-
-        # Centroides por bairro (Defesa Civil) - apenas Recife por enquanto
-        if nome_cidade.strip().lower() == "recife":
-            bairros_path = Path("outputs/bairros_alagamento_recife.json")
-            if bairros_path.exists():
-                try:
-                    with bairros_path.open("r", encoding="utf-8") as f:
-                        bairros = json.load(f)
-                    if isinstance(bairros, list) and bairros:
-                        bairros_group = folium.FeatureGroup(
-                            name="Chamados por bairro (Defesa Civil)",
-                            show=True,
-                            overlay=True,
-                            control=True,
-                        )
-                        for item in bairros:
-                            try:
-                                lat = float(item.get("lat"))
-                                lon = float(item.get("lon"))
-                            except Exception:
-                                continue
-                            nome = str(item.get("bairro", "")).strip()
-                            chamados = item.get("chamados")
-                            pct_mod_alto = item.get("pct_area_mod_alto")
-                            pct_alto = item.get("pct_area_alto")
-                            area_km2 = item.get("area_km2")
-
-                            linhas = []
-                            if nome:
-                                linhas.append(f"<b>Bairro</b>: {nome}")
-                            if chamados is not None:
-                                linhas.append(f"<b>Chamados</b>: {chamados}")
-                            if pct_mod_alto is not None:
-                                linhas.append(f"<b>% area risco >=2</b>: {pct_mod_alto:.1f}%")
-                            if pct_alto is not None:
-                                linhas.append(f"<b>% area risco >=3</b>: {pct_alto:.1f}%")
-                            if area_km2 is not None:
-                                linhas.append(f"<b>Area (km2)</b>: {area_km2:.2f}")
-                            popup_txt = "<br>".join(linhas) if linhas else "Bairro"
-
-                            # Raio proporcional ao numero de chamados (escala suave)
-                            try:
-                                chamados_val = float(chamados) if chamados is not None else 0.0
-                            except Exception:
-                                chamados_val = 0.0
-                            if chamados_val <= 0:
-                                continue
-                            radius = 4.0 + min(20.0, np.sqrt(max(chamados_val, 0.0)) * 2.0)
-
-                            folium.CircleMarker(
-                                location=[lat, lon],
-                                radius=radius,
-                                color="#d73027",
-                                fill_color="#d73027",
-                                fill=True,
-                                fill_opacity=1,
-                                #fill_opacity=0.5,
-                                popup=popup_txt,
-                            ).add_to(bairros_group)
-                        bairros_group.add_to(m)
-                except Exception as e:
-                    print(f"Erro ao carregar bairros agregados: {e}")
 
         # Raster overlay
         with rasterio.open(raster_path) as src:
@@ -373,69 +313,69 @@ class MunicipioService:
             pass
 
         # Camada de mancha de inundação (HEC-RAS)
-        mancha_group = folium.FeatureGroup(
-            name="Mancha de inundação (HEC-RAS)",
-            show=False,
-            overlay=True,
-            control=True,
-        )
-        try:
-            mancha_path = "dados/manchas-inundacao-normalizado.tif"
-            if Path(mancha_path).exists():
-                with rasterio.open(mancha_path) as mancha_src:
-                    # Ler dados da mancha
-                    mancha_data = mancha_src.read(1).astype(np.float32)
-                    mancha_nodata = mancha_src.nodata
-
-                    # Calcular transformação para EPSG:4326 com as mesmas dimensões do grid de risco
-                    mancha_transform, mancha_w, mancha_h = calculate_default_transform(
-                        mancha_src.crs, "EPSG:4326", mancha_src.width, mancha_src.height, *mancha_src.bounds
-                    )
-
-                    # Reprojetar mancha para o mesmo grid do overlay de risco (EPSG:4326)
-                    # Importante: manter float para não truncar rasters normalizados (0..1) ao converter para uint8
-                    mancha_reproj = np.full((height, width), 0.0, dtype=np.float32)
-                    reproject(
-                        source=mancha_data.astype(np.float32),
-                        destination=mancha_reproj,
-                        src_transform=mancha_src.transform,
-                        src_crs=mancha_src.crs,
-                        dst_transform=transform,
-                        dst_crs="EPSG:4326",
-                        resampling=Resampling.nearest,
-                        src_nodata=float(mancha_nodata)
-                        if (mancha_nodata is not None and np.isfinite(mancha_nodata))
-                        else 0.0,
-                        dst_nodata=0.0,
-                    )
-
-                    # Converter para RGBA: azul semi-transparente onde houver inundação
-                    mancha_rgba = np.zeros((height, width, 4), dtype=np.uint8)
-                    # Onde mancha_reproj > 0 (inundação), colorir em azul
-                    # (limiar pequeno para evitar problemas numéricos/ruído)
-                    flood_mask = mancha_reproj > 1e-6
-                    mancha_rgba[flood_mask, 0] = 0      # R
-                    mancha_rgba[flood_mask, 1] = 100    # G
-                    mancha_rgba[flood_mask, 2] = 200    # B
-                    # Alpha total no pixel; a transparência final fica controlada pelo parâmetro opacity do overlay
-                    mancha_rgba[flood_mask, 3] = 255
-
-                    folium.raster_layers.ImageOverlay(
-                        name="Mancha de inundação (HEC-RAS)",
-                        image=mancha_rgba,
-                        bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
-                        opacity=0.8,
-                        interactive=False,
-                        cross_origin=False,
-                    ).add_to(mancha_group)
-        except Exception as e:
-            # Se faltar a mancha ou der erro, apenas não desenha
-            print(f"Erro ao carregar camada HEC-RAS: {e}")
-            import traceback
-            traceback.print_exc()
-
-        # Sempre adicionar o grupo ao mapa, mesmo se vazio, para aparecer no LayerControl
-        mancha_group.add_to(m)
+        # mancha_group = folium.FeatureGroup(
+        #     name="Mancha de inundação (HEC-RAS)",
+        #     show=False,
+        #     overlay=True,
+        #     control=True,
+        # )
+        # try:
+        #     mancha_path = "dados/manchas-inundacao-normalizado.tif"
+        #     if Path(mancha_path).exists():
+        #         with rasterio.open(mancha_path) as mancha_src:
+        #             # Ler dados da mancha
+        #             mancha_data = mancha_src.read(1).astype(np.float32)
+        #             mancha_nodata = mancha_src.nodata
+        #
+        #             # Calcular transformação para EPSG:4326 com as mesmas dimensões do grid de risco
+        #             mancha_transform, mancha_w, mancha_h = calculate_default_transform(
+        #                 mancha_src.crs, "EPSG:4326", mancha_src.width, mancha_src.height, *mancha_src.bounds
+        #             )
+        #
+        #             # Reprojetar mancha para o mesmo grid do overlay de risco (EPSG:4326)
+        #             # Importante: manter float para não truncar rasters normalizados (0..1) ao converter para uint8
+        #             mancha_reproj = np.full((height, width), 0.0, dtype=np.float32)
+        #             reproject(
+        #                 source=mancha_data.astype(np.float32),
+        #                 destination=mancha_reproj,
+        #                 src_transform=mancha_src.transform,
+        #                 src_crs=mancha_src.crs,
+        #                 dst_transform=transform,
+        #                 dst_crs="EPSG:4326",
+        #                 resampling=Resampling.nearest,
+        #                 src_nodata=float(mancha_nodata)
+        #                 if (mancha_nodata is not None and np.isfinite(mancha_nodata))
+        #                 else 0.0,
+        #                 dst_nodata=0.0,
+        #             )
+        #
+        #             # Converter para RGBA: azul semi-transparente onde houver inundação
+        #             mancha_rgba = np.zeros((height, width, 4), dtype=np.uint8)
+        #             # Onde mancha_reproj > 0 (inundação), colorir em azul
+        #             # (limiar pequeno para evitar problemas numéricos/ruído)
+        #             flood_mask = mancha_reproj > 1e-6
+        #             mancha_rgba[flood_mask, 0] = 0      # R
+        #             mancha_rgba[flood_mask, 1] = 100    # G
+        #             mancha_rgba[flood_mask, 2] = 200    # B
+        #             # Alpha total no pixel; a transparência final fica controlada pelo parâmetro opacity do overlay
+        #             mancha_rgba[flood_mask, 3] = 255
+        #
+        #             folium.raster_layers.ImageOverlay(
+        #                 name="Mancha de inundação (HEC-RAS)",
+        #                 image=mancha_rgba,
+        #                 bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
+        #                 opacity=0.8,
+        #                 interactive=False,
+        #                 cross_origin=False,
+        #             ).add_to(mancha_group)
+        # except Exception as e:
+        #     # Se faltar a mancha ou der erro, apenas não desenha
+        #     print(f"Erro ao carregar camada HEC-RAS: {e}")
+        #     import traceback
+        #     traceback.print_exc()
+        #
+        # # Sempre adicionar o grupo ao mapa, mesmo se vazio, para aparecer no LayerControl
+        # mancha_group.add_to(m)
 
         # Converter para imagem normalizada (0-255) para overlay
         # Verificar se deve usar classes discretas (4 classes) ou contínuo
@@ -485,6 +425,7 @@ class MunicipioService:
             cross_origin=False
         ).add_to(risco_group)
         risco_group.add_to(m)
+        risco_layer_js = risco_group.get_name()
 
         # Importante: o JS de atualização usa setUrl(), que existe no ImageOverlay (não no FeatureGroup)
         overlay = risco_overlay
@@ -492,6 +433,8 @@ class MunicipioService:
         # Plugins
 
         # Popup customizado: risco + uso do solo no ponto clicado
+        chamados_legend_html = None
+        chamados_layer_js = None
         map_name = m.get_name()
         overlay_name = overlay.get_name()
         cidade_js = str(nome_cidade).replace("\\", "\\\\").replace("\"", "\\\"")
@@ -615,7 +558,21 @@ class MunicipioService:
             padding: 10px;
             box-shadow: 3px 3px 5px rgba(0,0,0,0.25);
         ">
-            {sliders_inner_html}
+            <button type="button" onclick="
+                var el = document.getElementById('ahp_panel');
+                if (el) el.style.display = (el.style.display === 'none') ? 'block' : 'none';
+            " style="
+                width: 100%;
+                padding: 6px 8px;
+                border: 1px solid #777;
+                background: #f7f7f7;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+            ">Ajustes AHP</button>
+            <div id="ahp_panel" style="margin-top:8px; display:none;">
+                {sliders_inner_html}
+            </div>
         </div>
         {{% endmacro %}}
         """
@@ -836,7 +793,7 @@ class MunicipioService:
 
         template = """
         {% macro html(this, kwargs) %}
-        <div style="
+        <div id="legend_risco" style="
             position: fixed;
             bottom: 20px;
             left: 20px;
@@ -849,6 +806,7 @@ class MunicipioService:
             border-radius:5px;
             padding: 10px;
             box-shadow: 3px 3px 5px rgba(0,0,0,0.4);
+            display: none;
         ">
             <b>Risco de Alagamento</b><br>
             <i style="background:#d73027;width:20px;height:20px;display:inline-block;margin-right:5px;"></i> Alto<br>
@@ -875,12 +833,23 @@ class MunicipioService:
                 ("Av. Norte Miguel Arraes de Alencar, ao lado do Senai", -8.04713, -34.87757),
             ]
 
+            pontos_group = folium.FeatureGroup(
+                name="Pontos de alagamento conhecidos",
+                show=False,
+                overlay=True,
+                control=True,
+            )
+
             for endereco, lat_ponto, lon_ponto in pontos_alagamento:
                 folium.Marker(
                     location=[lat_ponto, lon_ponto],
                     popup=folium.Popup(endereco, max_width=300),
                     icon=folium.Icon(color="red", icon="info-sign"),
-                ).add_to(m)
+                ).add_to(pontos_group)
+
+            pontos_group.add_to(m)
+
+        chamados_legend_html = None
 
         # Fronteiras dos bairros (Recife) - adicionar por ultimo para ficar acima do raster
         if nome_cidade.strip().lower() == "recife":
@@ -901,29 +870,221 @@ class MunicipioService:
                         if "datetime" in str(dtype):
                             gdf_bairros[col] = gdf_bairros[col].astype(str)
 
+                    bairros_calls_path = Path("outputs/bairros_alagamento_recife.json")
+                    bairros_info = {}
+                    if bairros_calls_path.exists():
+                        try:
+                            with bairros_calls_path.open("r", encoding="utf-8") as f:
+                                bairros_data = json.load(f)
+                            if isinstance(bairros_data, list):
+                                for item in bairros_data:
+                                    nome = str(item.get("bairro", "")).strip()
+                                    if not nome:
+                                        continue
+                                    try:
+                                        chamados_val = float(item.get("chamados"))
+                                    except Exception:
+                                        chamados_val = 0.0
+                                    try:
+                                        area_km2 = float(item.get("area_km2"))
+                                    except Exception:
+                                        area_km2 = np.nan
+                                    try:
+                                        pct_alto = float(item.get("pct_area_alto"))
+                                    except Exception:
+                                        pct_alto = np.nan
+
+                                    bairros_info[nome.casefold()] = {
+                                        "chamados": chamados_val,
+                                        "area_km2": area_km2,
+                                        "pct_area_alto": pct_alto,
+                                    }
+                        except Exception as e:
+                            print(f"Erro ao carregar chamados por bairro: {e}")
+
+                    name_col = None
+                    for cand in ["bairro", "BAIRRO", "NOME", "nome", "NM_BAIRRO", "NM_BAIRR", "Bairro"]:
+                        if cand in gdf_bairros.columns:
+                            name_col = cand
+                            break
+                    if name_col is None:
+                        for col in gdf_bairros.columns:
+                            if col == "geometry":
+                                continue
+                            if gdf_bairros[col].dtype == object:
+                                name_col = col
+                                break
+
+                    if name_col:
+                        bairro_key = (
+                            gdf_bairros[name_col]
+                            .astype(str)
+                            .str.strip()
+                            .str.casefold()
+                        )
+                        info_map = bairro_key.map(bairros_info)
+                        gdf_bairros["__chamados"] = (
+                            info_map
+                            .map(lambda v: v.get("chamados") if isinstance(v, dict) else 0.0)
+                            .fillna(0.0)
+                        )
+                        gdf_bairros["__area_km2"] = info_map.map(
+                            lambda v: v.get("area_km2") if isinstance(v, dict) else np.nan
+                        )
+                        gdf_bairros["__pct_area_alto"] = info_map.map(
+                            lambda v: v.get("pct_area_alto") if isinstance(v, dict) else np.nan
+                        )
+                    else:
+                        gdf_bairros["__chamados"] = 0.0
+                        gdf_bairros["__area_km2"] = np.nan
+                        gdf_bairros["__pct_area_alto"] = np.nan
+
+                    chamados_series = gdf_bairros["__chamados"].astype(float)
+                    max_real = float(chamados_series.max() or 0.0)
+                    chamados_pos = chamados_series[chamados_series > 0]
+                    if len(chamados_pos) > 0:
+                        max_ref = float(np.percentile(chamados_pos, 95))
+                    else:
+                        max_ref = 0.0
+                    if max_ref <= 0.0:
+                        max_ref = max_real
+
+                    def _chamados_style(feature):
+                        try:
+                            chamados_val = float(feature["properties"].get("__chamados", 0.0))
+                        except Exception:
+                            chamados_val = 0.0
+                        if not (chamados_val > 0 and max_ref > 0):
+                            return {
+                                "fillColor": "#ffffff",
+                                "color": "#1f78b4",
+                                "weight": 1.5,
+                                "opacity": 0.9,
+                                "fillOpacity": 0.0,
+                            }
+                        t = min(1.0, chamados_val / max_ref)
+                        rgba = plt.cm.OrRd(t)
+                        fill_color = mcolors.to_hex(rgba, keep_alpha=False)
+                        return {
+                            "fillColor": fill_color,
+                            "color": "#1f78b4",
+                            "weight": 1.5,
+                            "opacity": 0.9,
+                            "fillOpacity": 0.45,
+                        }
+
                     bairros_group = folium.FeatureGroup(
-                        name="Fronteira dos bairros",
-                        show=True,
+                        name="Chamados por bairro",
+                        show=False,
                         overlay=True,
                         control=True,
                     )
+                    tooltip_fields = ["__chamados", "__area_km2", "__pct_area_alto"]
+                    tooltip_aliases = ["Chamados", "Area (km2)", "% area risco >=3"]
+                    if name_col:
+                        tooltip_fields = [name_col] + tooltip_fields
+                        tooltip_aliases = ["Bairro"] + tooltip_aliases
+
                     folium.GeoJson(
                         gdf_bairros,
-                        name="Fronteira dos bairros",
-                        style_function=lambda x: {
-                            "fillColor": "#000000",
-                            "color": "#1f78b4",
-                            "weight": 2,
-                            "opacity": 1.0,
-                            "fillOpacity": 0.0,
-                        },
+                        name="Chamados por bairro",
+                        style_function=_chamados_style,
+                        tooltip=folium.GeoJsonTooltip(
+                            fields=tooltip_fields,
+                            aliases=tooltip_aliases,
+                            localize=True,
+                        ),
                     ).add_to(bairros_group)
                     bairros_group.add_to(m)
+                    chamados_layer_js = bairros_group.get_name()
+
+                    if max_ref > 0:
+                        legend_colors = [
+                            mcolors.to_hex(plt.cm.OrRd(x), keep_alpha=False)
+                            for x in np.linspace(0, 1, 6)
+                        ]
+                        gradient = ", ".join(legend_colors)
+                        max_label = int(round(max_real))
+                        cap_label = int(round(max_ref))
+                        chamados_legend_html = f"""
+                        {{% macro html(this, kwargs) %}}
+                        <div id=\"legend_chamados\" style=\"
+                            position: fixed;
+                            bottom: 20px;
+                            left: 190px;
+                            width: 170px;
+                            z-index: 9999;
+                            font-size: 12px;
+                            color: #ffffff;
+                            background-color: rgba(0,0,0,0.6);
+                            border: 2px solid rgba(255,255,255,0.7);
+                            border-radius: 5px;
+                            padding: 8px;
+                            box-shadow: 3px 3px 5px rgba(0,0,0,0.35);
+                            display: none;
+                        \">
+                            <b>Chamados por bairro</b><br>
+                            <div style=\"height:12px; margin-top:6px; border:1px solid rgba(255,255,255,0.7); background: linear-gradient(to right, {gradient});\"></div>
+                            <div style=\"display:flex; justify-content:space-between; margin-top:4px;\">
+                                <span>0</span>
+                                <span>{max_label}</span>
+                            </div>
+                            <div style=\"margin-top:2px; font-size:10px; color:#ffffff; opacity:0.85;\">cap P95: {cap_label}</div>
+                        </div>
+                        {{% endmacro %}}
+                        """
             except Exception as e:
                 print(f"Erro ao carregar fronteiras de bairros: {e}")
 
+        if chamados_legend_html and chamados_layer_js:
+            chamados_legend_macro = MacroElement()
+            chamados_legend_macro._template = Template(chamados_legend_html)
+            m.add_child(chamados_legend_macro)
+
+            legend_toggle_template = f"""
+            {{% macro script(this, kwargs) %}}
+            function _toggleChamadosLegend(show) {{
+                const el = document.getElementById('legend_chamados');
+                if (!el) return;
+                el.style.display = show ? 'block' : 'none';
+            }}
+            var _chamadosLayer = {chamados_layer_js};
+            {map_name}.on('overlayadd', function(e) {{
+                if (e.layer === _chamadosLayer) _toggleChamadosLegend(true);
+            }});
+            {map_name}.on('overlayremove', function(e) {{
+                if (e.layer === _chamadosLayer) _toggleChamadosLegend(false);
+            }});
+            _toggleChamadosLegend({map_name}.hasLayer(_chamadosLayer));
+            {{% endmacro %}}
+            """
+            legend_toggle_macro = MacroElement()
+            legend_toggle_macro._template = Template(legend_toggle_template)
+            m.add_child(legend_toggle_macro)
+
+        risco_legend_toggle_template = f"""
+        {{% macro script(this, kwargs) %}}
+        function _toggleRiscoLegend(show) {{
+            const el = document.getElementById('legend_risco');
+            if (!el) return;
+            el.style.display = show ? 'block' : 'none';
+        }}
+        var _riscoLayer = {risco_layer_js};
+        {map_name}.on('overlayadd', function(e) {{
+            if (e.layer === _riscoLayer) _toggleRiscoLegend(true);
+        }});
+        {map_name}.on('overlayremove', function(e) {{
+            if (e.layer === _riscoLayer) _toggleRiscoLegend(false);
+        }});
+        _toggleRiscoLegend({map_name}.hasLayer(_riscoLayer));
+        {{% endmacro %}}
+        """
+        risco_legend_toggle_macro = MacroElement()
+        risco_legend_toggle_macro._template = Template(risco_legend_toggle_template)
+        m.add_child(risco_legend_toggle_macro)
+
         # Mostrar a lista expandida para destacar todas as camadas (incluindo HEC-RAS)
-        folium.LayerControl(position="topright", collapsed=False, sortLayers=True).add_to(m)
+        folium.LayerControl(position="topright", collapsed=True, sortLayers=True).add_to(m)
 
         m.add_child(macro)
 
