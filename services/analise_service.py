@@ -3,6 +3,8 @@ from rasterio.transform import from_origin
 from rasterio.mask import mask
 from rasterio.windows import from_bounds
 from rasterio.plot import show
+from pathlib import Path
+import os
 import geopandas as gpd
 import numpy as np
 import rasterio
@@ -16,12 +18,11 @@ class AnaliseService:
         self.sistema_coordenadas = None
 
     def executar(self, nome_cidade, gdf_municipio):
-        config = load_config()
+        config = load_config() or {}
 
         self.cidade = nome_cidade.replace(" ", "-").lower()
         self._definir_sistema_coordenadas(gdf_municipio)
-
-        self._definir_sistema_coordenadas(gdf_municipio)
+        self._ensure_output_dirs()
         self._criar_shapefile_municipio(gdf_municipio)
         self._criar_moldura_municipio()
         self._processar_mde()
@@ -52,13 +53,18 @@ class AnaliseService:
             )
         
         if config["criterios"]["hipsometria"]["ativo"]:
+            # Se for Recife, usar classes hardcoded; senão calcular dinamicamente
+            ipso_classes = self._calcular_classes_hipsometria(
+                f"outputs/mde/mde_{self.cidade}.tif",
+                config["criterios"]["hipsometria"].get("classes", [])
+            )
             self._reclassificar_raster(
                 f"outputs/mde/mde_{self.cidade}.tif",
                 f"outputs/hipsometria/hipsometria_{self.cidade}_reclass.tif",
-                config["criterios"]["hipsometria"]["classes"],
+                ipso_classes,
             )
 
-        pesos, cr = self._calcular_pesos()
+        pesos, cr = self._calcular_pesos(config)
         self._gerar_mapa_risco(pesos)
 
         risco_path = f"outputs/mapas_de_risco/risco_alagamento_{self.cidade}.tif"
@@ -70,16 +76,30 @@ class AnaliseService:
 
 
     def _definir_sistema_coordenadas(self, gdf_municipio):
-        zona_24s = "EPSG:31984"     # SIRGAS 2000 / UTM 24S
-        zona_25s = "EPSG:31985"     # SIRGAS 2000 / UTM 25S
+        """Define CRS projetado (SIRGAS 2000 / UTM) baseado na longitude do município.
 
-        centroid = gdf_municipio.geometry.centroid.iloc[0]
-        lon = centroid.x
+        Pernambuco pode cair em mais de uma zona UTM (principalmente 23S, 24S, 25S).
+        Usar a zona correta melhora alinhamento/área e evita distorções desnecessárias.
+        """
 
-        if lon < -36:
-            self.sistema_coordenadas = zona_24s
-        else:
-            self.sistema_coordenadas = zona_25s
+        gdf = gdf_municipio
+        try:
+            if gdf.crs is None or str(gdf.crs).upper() != "EPSG:4326":
+                gdf = gdf.to_crs(epsg=4326)
+        except Exception:
+            # Se houver problema de CRS, cai no comportamento antigo (assume 25S)
+            self.sistema_coordenadas = "EPSG:31985"
+            return
+
+        centroid = gdf.geometry.centroid.iloc[0]
+        lon = float(centroid.x)
+
+        # Zona UTM padrão: zone = floor((lon + 180) / 6) + 1
+        utm_zone = int(np.floor((lon + 180.0) / 6.0) + 1)
+
+        # SIRGAS 2000 / UTM zone {Z}S => EPSG:31960 + Z (ex.: 23S->31983, 24S->31984, 25S->31985)
+        epsg_code = 31960 + utm_zone
+        self.sistema_coordenadas = f"EPSG:{epsg_code}"
     
     def _criar_shapefile_municipio(self, gdf_municipio):
         gdf_reproj = gdf_municipio.to_crs(self.sistema_coordenadas)
@@ -95,10 +115,13 @@ class AnaliseService:
         xmin_pad, ymin_pad = xmin - padding, ymin - padding
         xmax_pad, ymax_pad = xmax + padding, ymax + padding
 
-        res = 30
 
-        width = int((xmax_pad - xmin_pad) / res)
-        height = int((ymax_pad - ymin_pad) / res)
+        # Resolução padrão (metros/pixel) da grade mestre da análise.
+        # Importante: MapBiomas é categórico (usar nearest ao alinhar).
+        res = 30  # 30m
+
+        width = int(np.ceil((xmax_pad - xmin_pad) / res))
+        height = int(np.ceil((ymax_pad - ymin_pad) / res))
 
         transform_raster = from_origin(xmin_pad, ymax_pad, res, res)
 
@@ -118,8 +141,67 @@ class AnaliseService:
         with rasterio.open(out_path, "w", **profile) as dst:
             dst.write(base_raster, 1)
 
+    def _ensure_output_dirs(self):
+        dirs = [
+            "outputs/declividade",
+            "outputs/fluxo_acumulado",
+            "outputs/hipsometria",
+            "outputs/limites_municipios",
+            "outputs/mapas_de_risco",
+            "outputs/mapas_interativos",
+            "outputs/mde",
+            "outputs/molduras_municipios",
+            "outputs/uso_do_solo",
+        ]
+        for d in dirs:
+            os.makedirs(d, exist_ok=True)
+
+    def _resolve_mde_path(self) -> str:
+        """Resolve o MDE de entrada.
+
+        Estratégia:
+        1) Se houver mapeamento em static/config/config.json (dados.mde), usa-o.
+        2) Tenta um MDE por-cidade (dados/mde_<cidade>.tif).
+        3) Por fim, usa o MDE estadual (preferindo dados/mde_pernambuco_srtm.tif) quando existir.
+        """
+
+        config = load_config() or {}
+        mde_cfg = (config.get("dados") or {}).get("mde")
+        if isinstance(mde_cfg, dict):
+            if self.cidade in mde_cfg and mde_cfg[self.cidade]:
+                p = Path(str(mde_cfg[self.cidade]))
+                if p.exists():
+                    return str(p)
+            if "estado" in mde_cfg and mde_cfg["estado"]:
+                p = Path(str(mde_cfg["estado"]))
+                if p.exists():
+                    return str(p)
+
+        candidates: list[Path] = [
+            Path(f"dados/mde_{self.cidade}.tif"),
+            Path(f"dados/mde_{self.cidade.replace('-', '_')}.tif"),
+        ]
+
+        # MDE estadual (preferir nome com identificação do produto de origem)
+        candidates.extend(
+            [
+                Path("dados/mde_pernambuco_srtm.tif"),
+                Path("dados/mde_pernambuco.tif"),
+            ]
+        )
+
+        for p in candidates:
+            if p.exists():
+                return str(p)
+
+        raise FileNotFoundError(
+            "Nenhum MDE encontrado. Para rodar em Recife/Belo Jardim, forneça um MDE por-cidade em: "
+            f"dados/mde_{self.cidade}.tif (ou configure dados.mde no static/config/config.json). "
+            "Para generalizar para todo o estado, gere/adicione o mosaico estadual em dados/mde_pernambuco_srtm.tif (ou configure dados.mde.estado)."
+        )
+
     def _processar_mde(self):
-        mde_path = "dados/mde_pernambuco.tif"
+        mde_path = self._resolve_mde_path()
         moldura_path = f"outputs/molduras_municipios/moldura-{self.cidade}.tif"
         output_path = f"outputs/mde/mde_{self.cidade}.tif"
 
@@ -156,18 +238,59 @@ class AnaliseService:
     def _reclassificar_raster(self, input_path, output_path, classes, is_categorical=False):
         with rasterio.open(input_path) as src:
             data = src.read(1)
+            src_nodata = src.nodata
             profile = src.profile
 
         reclass = np.zeros_like(data, dtype=np.uint8)
+
+        # Máscara de dados válidos (evita classificar NoData/NaN)
+        valid = np.isfinite(data)
+        if src_nodata is not None and np.isfinite(src_nodata):
+            valid &= data != src_nodata
+
         if is_categorical:
-            for _, cls in classes.items():
-                for id_val in cls["ids"]:
-                    reclass[data == id_val] = cls["valor"]
+            for _, cls in (classes or {}).items():
+                for id_val in cls.get("ids", []):
+                    reclass[(data == id_val) & valid] = cls.get("valor", 0)
         else:
+            if not isinstance(classes, list) or not classes:
+                raise ValueError("Classes de reclassificação (contínuas) inválidas ou vazias")
+
+            # Aplicar classes configuradas
+            parsed: list[dict] = []
             for cls in classes:
-                min_val = cls["min"] if cls["min"] is not None else -np.inf
-                max_val = cls["max"] if cls["max"] is not None else np.inf
-                reclass[(data >= min_val) & (data <= max_val)] = cls["valor"]
+                min_val = cls.get("min", None)
+                max_val = cls.get("max", None)
+                val = int(cls.get("valor", 0))
+                parsed.append(
+                    {
+                        "min": (-np.inf if min_val is None else float(min_val)),
+                        "max": (np.inf if max_val is None else float(max_val)),
+                        "valor": val,
+                    }
+                )
+
+            parsed.sort(key=lambda d: d["min"])
+
+            for cls in parsed:
+                reclass[valid & (data >= cls["min"]) & (data <= cls["max"])] = cls["valor"]
+
+            # Corrigir pixels válidos que ficaram sem classe (muito comum com valor 0 em declividade/fluxo)
+            unclassified = valid & (reclass == 0)
+            if np.any(unclassified):
+                first = parsed[0]
+                last = parsed[-1]
+
+                # Abaixo do mínimo -> primeira classe
+                reclass[unclassified & (data < first["min"])] = first["valor"]
+                # Acima do máximo -> última classe
+                reclass[unclassified & (data > last["max"])] = last["valor"]
+
+                # Gaps entre classes: atribui para a classe anterior (comportamento conservador)
+                for prev, nxt in zip(parsed[:-1], parsed[1:]):
+                    gap = unclassified & (data > prev["max"]) & (data < nxt["min"])
+                    if np.any(gap):
+                        reclass[gap] = prev["valor"]
 
         profile.update(dtype=rasterio.uint8, count=1, nodata=0)
         with rasterio.open(output_path, "w", **profile) as dst:
@@ -231,6 +354,88 @@ class AnaliseService:
                         resampling=Resampling.nearest
                     )
     
+    def _calcular_classes_hipsometria(self, mde_path: str, config_classes: list | None = None) -> list:
+        """Calcula classes de hipsometria (altitude) dinamicamente.
+        
+        Metodologia Cury et al. (2021): Para cada município, divide a faixa altimétrica (min-max)
+        em intervalos iguais.
+        
+        Para Recife (caso especial): Usa as classes hardcoded da config.
+        Para outros municípios: Calcula automaticamente 4 intervalos iguais.
+        
+        Args:
+            mde_path: Caminho para o raster do MDE relativo à moldura municipal
+            config_classes: Classes configuradas (usadas para Recife)
+        
+        Returns:
+            Lista com dicts contendo {min, max, valor} no formato esperado por _reclassificar_raster
+        """
+        
+        # Se for Recife, usar as classes da config (hardcoded específicas da cidade)
+        if self.cidade == "recife":
+            if config_classes and isinstance(config_classes, list) and len(config_classes) > 0:
+                return config_classes
+            # Fallback: usar padrão Recife mesmo se não estiver em config
+            return [
+                {"min": 0.0, "max": 3.0, "valor": 4.0},
+                {"min": 3.0, "max": 10.0, "valor": 3.0},
+                {"min": 10.0, "max": 50.0, "valor": 2.0},
+                {"min": 50.0, "max": None, "valor": 1.0},
+            ]
+        
+        # Para outros municípios: calcular intervalos iguais
+        with rasterio.open(mde_path) as src:
+            data = src.read(1)
+            src_nodata = src.nodata
+        
+        # Máscara de dados válidos
+        valid = np.isfinite(data)
+        if src_nodata is not None and np.isfinite(src_nodata):
+            valid &= data != src_nodata
+        
+        if not np.any(valid):
+            # Se não houver dados válidos, retornar padrão genérico
+            return [
+                {"min": 0.0, "max": 25.0, "valor": 4.0},
+                {"min": 25.0, "max": 50.0, "valor": 3.0},
+                {"min": 50.0, "max": 100.0, "valor": 2.0},
+                {"min": 100.0, "max": None, "valor": 1.0},
+            ]
+        
+        # Extrair min/max de dados válidos
+        min_alt = float(np.nanmin(data[valid]))
+        max_alt = float(np.nanmax(data[valid]))
+        
+        # Evitar divisão por zero
+        if min_alt >= max_alt:
+            min_alt = 0.0
+            max_alt = 1.0
+        
+        # Calcular intervalo igual (metodologia Cury et al. 2021)
+        n_classes = 4
+        intervalo = (max_alt - min_alt) / n_classes
+        
+        classes = []
+        for i in range(n_classes):
+            cls_min = min_alt + (i * intervalo)
+            cls_max = min_alt + ((i + 1) * intervalo)
+            
+            # Última classe: sem limite máximo (None)
+            if i == n_classes - 1:
+                cls_max = None
+            
+            # Valor de reclassificação: 4 para mais baixo, 1 para mais alto
+            # (inversamente correlacionado com altitude para risco de inundação)
+            valor = float(n_classes - i)
+            
+            classes.append({
+                "min": cls_min,
+                "max": cls_max,
+                "valor": valor,
+            })
+        
+        return classes
+    
     def _pesos_metodo_ahp(self, pairwise):
         A = np.array(pairwise, dtype=float)
         # Autovetor principal
@@ -248,13 +453,33 @@ class AnaliseService:
         CR = CI / RI if RI > 0 else 0.0
         return w, CR
     
-    def _calcular_pesos(self):
-        uso_vs_declividade = 1/5
-        uso_vs_fluxo = 3
-        uso_vs_hipsometria = 1/5
-        declividade_vs_fluxo = 3
-        declividade_vs_hipsometria = 1
-        fluxo_vs_hipsometria = 1/5
+    def _calcular_pesos(self, config: dict | None = None):
+        cfg = (config or {}).get("pesos") if isinstance((config or {}).get("pesos"), dict) else {}
+
+        # Defaults (mantém o comportamento atual se não houver config)
+        uso_vs_declividade = float(cfg.get("uso_vs_declividade", 1 / 5))
+        uso_vs_fluxo = float(cfg.get("uso_vs_fluxo", 3))
+        uso_vs_hipsometria = float(cfg.get("uso_vs_hipsometria", 1 / 5))
+        declividade_vs_fluxo = float(cfg.get("declividade_vs_fluxo", 3))
+        declividade_vs_hipsometria = float(cfg.get("declividade_vs_hipsometria", 1))
+        fluxo_vs_hipsometria = float(cfg.get("fluxo_vs_hipsometria", 1 / 5))
+
+        # Sanitização mínima para evitar divisões por zero / valores inválidos
+        pairwise = [
+            uso_vs_declividade,
+            uso_vs_fluxo,
+            uso_vs_hipsometria,
+            declividade_vs_fluxo,
+            declividade_vs_hipsometria,
+            fluxo_vs_hipsometria,
+        ]
+        if not np.isfinite(pairwise).all() or any(v <= 0 for v in pairwise):
+            uso_vs_declividade = 1 / 5
+            uso_vs_fluxo = 3
+            uso_vs_hipsometria = 1 / 5
+            declividade_vs_fluxo = 3
+            declividade_vs_hipsometria = 1
+            fluxo_vs_hipsometria = 1 / 5
 
         A = [
             [1, uso_vs_declividade, uso_vs_fluxo, uso_vs_hipsometria],
@@ -289,11 +514,18 @@ class AnaliseService:
             perfil = src1.profile
 
         # Aplicar pesos
+        # IMPORTANTE: 0 nos rasters reclassificados significa NoData/fora da área/"excluído" (ex.: corpos d'água).
+        # Para o TIFF "inicial" bater com o overlay dinâmico, precisamos mascarar esses pixels.
+        mask_valid = (uso > 0) & (declividade > 0) & (fluxo > 0) & (hipso > 0)
         risco = (uso * peso_uso) + (declividade * peso_declividade) + (fluxo * peso_fluxo) + (hipso * peso_hipso)
+        risco = risco.astype(np.float32, copy=False)
 
-        perfil.update(dtype=rasterio.float32, count=1)
+        nodata = -9999.0
+        risco[~mask_valid] = nodata
+
+        perfil.update(dtype=rasterio.float32, count=1, nodata=nodata)
         with rasterio.open(saida_risco, "w", **perfil) as dst:
-            dst.write(risco.astype(rasterio.float32), 1)
+            dst.write(risco, 1)
 
     
     def _recortar_mapa(self, raster_path, output_path):
