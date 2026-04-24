@@ -1,7 +1,16 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify
+
 from services.municipio_service import MunicipioService
+from services.mapa.mapa_service import MapaService
 from services.analise_service import AnaliseService
-from utils.utils import load_config, save_config
+
+from services.mapa.layers.municipio_layer import MunicipioLayer
+from services.mapa.layers.raster_layer import RasterLayer
+from services.mapa.layers.pontos_alagamento_layer import PontosAlagamentoLayer
+from services.mapa.layers.uso_solo_layer import UsoSoloLayer
+
+from utils.utils import load_config, save_config, slug_cidade
+from utils.uso_solo_classes import USO_SOLO_CLASSES
 
 
 app = Flask(__name__)
@@ -11,8 +20,17 @@ municipios = MunicipioService("dados/PE_Municipios_2023/PE_Municipios_2023.shp")
 @app.route("/", methods=["GET"])
 def index():
     lista_cidades = municipios.get_nome_cidades()
-    mapa_html = municipios.gerar_mapa_base()
-    return render_template("index.html", cidade=None, lista_cidades=lista_cidades, mapa_html=mapa_html)
+
+    mapa = MapaService(center=[-8.38, -37.86])
+    mapa.add_base_layer()
+    mapa.add_layer_control()
+
+    return render_template(
+        "index.html", 
+        cidade=None, 
+        lista_cidades=lista_cidades, 
+        mapa_html=mapa.render()
+    )
 
 
 @app.route("/executar_analise", methods=["POST"])
@@ -24,12 +42,51 @@ def executar_analise():
         return jsonify({"status": "erro", "mensagem": "Nenhuma cidade informada"}), 400
 
     try:
-        analise_multicriterio = AnaliseService()
-        raster_risco_path = analise_multicriterio.executar(cidade, municipios.get_gdf_municipio(cidade))
+        gdf = municipios.get_gdf(cidade)
 
-        mapa_html = municipios.gerar_mapa_municipio(cidade, raster_risco_path)
-        
-        return jsonify({"status": "ok", "mapa_html": mapa_html})
+        analise = AnaliseService()
+        raster_path = analise.executar(cidade, gdf)
+
+        centro = gdf.geometry.centroid.iloc[0]
+
+        mapa_service = MapaService(center=[centro.y, centro.x])
+
+        mapa_service.add_base_layer()
+
+        mapa_service.add_layer(MunicipioLayer(gdf).get())
+
+        mapa_service.add_layer(
+            UsoSoloLayer(
+                raster_path=f"outputs/uso_do_solo/uso_do_solo_{slug_cidade(cidade)}_recortado.tif",
+                legenda=USO_SOLO_CLASSES
+            ).get()
+        )
+
+        mapa_service.add_layer(
+            RasterLayer(
+                raster_path,
+                colormap="RdYlGn_r",
+                name="Risco de Alagamento"
+            ).get()
+        )
+
+        pontos = [
+            ("Rua Imperial, bairro de São José", -8.07581, -34.89415),
+            ("Rua Nicolau Pereira", -8.07804, -34.90558),
+            ("Av. Eng. Abdias de Carvalho", -8.06123, -34.92227),
+            ("Av. Dois Rios", -8.11289, -34.93864),
+            ("Av. Mal Mascarenhas de Moraes", -8.11383, -34.91281),
+            ("Av. Recife próximo ao cruzamento com a Rua João Cabral de Melo Neto", -8.07953, -34.93374),
+            ("Av. Abdias de Carvalho, no cruzamento com a rua Delmiro Gouveia", -8.06252, -34.93219),
+            ("Av. Norte Miguel Arraes de Alencar, ao lado do Senai", -8.04713, -34.87757)
+        ]
+
+        mapa_service.add_layer(PontosAlagamentoLayer(pontos).get())
+
+        mapa_service.add_default_plugins()
+        mapa_service.add_layer_control()
+
+        return jsonify({"status": "ok", "mapa_html": mapa_service.render()})
     
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500

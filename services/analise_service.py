@@ -51,6 +51,11 @@ class AnaliseService:
                 is_categorical=True
             )
         
+        uso_path = f"outputs/uso_do_solo/uso_do_solo_{self.cidade}.tif"
+        uso_recortado_path = f"outputs/uso_do_solo/uso_do_solo_{self.cidade}_recortado.tif"
+
+        self._recortar_mapa(uso_path, uso_recortado_path)
+        
         if config["criterios"]["hipsometria"]["ativo"]:
             self._reclassificar_raster(
                 f"outputs/mde/mde_{self.cidade}.tif",

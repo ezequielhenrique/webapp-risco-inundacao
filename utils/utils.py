@@ -14,3 +14,6 @@ def load_config():
 def save_config(data):
     with open(CONFIG_FILE, "w") as f:
         json.dump(data, f, indent=4)
+
+def slug_cidade(nome):
+    return nome.strip().lower().replace(" ", "-")
