@@ -12,6 +12,9 @@ from services.mapa.layers.uso_solo_layer import UsoSoloLayer
 from utils.utils import load_config, save_config, slug_cidade
 from utils.uso_solo_classes import USO_SOLO_CLASSES
 
+import rasterio
+from rasterio.warp import transform
+
 
 app = Flask(__name__)
 municipios = MunicipioService("dados/PE_Municipios_2023/PE_Municipios_2023.shp")
@@ -49,7 +52,7 @@ def executar_analise():
 
         centro = gdf.geometry.centroid.iloc[0]
 
-        mapa_service = MapaService(center=[centro.y, centro.x])
+        mapa_service = MapaService(center=[centro.y, centro.x], cidade=cidade)
 
         mapa_service.add_base_layer()
 
@@ -85,6 +88,7 @@ def executar_analise():
 
         mapa_service.add_default_plugins()
         mapa_service.add_layer_control()
+        mapa_service.add_click_popup()
 
         return jsonify({"status": "ok", "mapa_html": mapa_service.render()})
     
@@ -131,6 +135,41 @@ def config():
 
     save_config(config)
     return redirect(url_for("index"))
+
+
+@app.route("/valor_ponto", methods=["POST"])
+def get_pixel_info():
+    data = request.get_json()
+
+    cidade = slug_cidade(data['cidade'])
+    lat = data['lat']
+    lon = data['lon']
+
+    valores = {}
+
+    def sample_raster(path, lon, lat):
+        with rasterio.open(path) as src:
+            xs, ys = transform("EPSG:4326", src.crs, [lon], [lat])
+
+            nodata = src.nodata
+
+            for val in src.sample([(xs[0], ys[0])]):
+                v = float(val[0])
+
+                if nodata is not None and v == nodata:
+                    return None
+
+                return v
+
+    valores["risco"] = sample_raster(f"outputs/mapas_de_risco/risco_alagamento_{cidade}_recortado.tif", lon, lat)
+    valores["uso_solo"] = sample_raster(f"outputs/uso_do_solo/uso_do_solo_{cidade}.tif", lon, lat)
+    valores["declividade"] = sample_raster(f"outputs/declividade/declividade_{cidade}.tif", lon, lat)
+    valores["elevacao"] = sample_raster(f"outputs/mde/mde_{cidade}.tif", lon, lat)
+    valores["fluxo"] = sample_raster(f"outputs/fluxo_acumulado/fluxo_acumulado_{cidade}.tif", lon, lat)
+
+    valores['uso_solo'] = USO_SOLO_CLASSES[valores['uso_solo']][0]
+
+    return jsonify(valores)
 
 
 @app.route("/sobre", methods=["GET"])
