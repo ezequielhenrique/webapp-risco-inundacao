@@ -6,12 +6,15 @@ import folium
 
 
 class RasterLayer:
-    def __init__(self, raster_path, colormap="RdYlGn_r", name="Raster", tipo="continuo", num_classes=4):
+    def __init__(self, raster_path, colormap="RdYlGn_r", name="Raster", tipo="continuo", num_classes=4, image_data=None, bounds=None):
         self.raster_path = raster_path
         self.colormap = colormap
         self.name = name
         self.tipo = tipo.lower()
         self.num_classes = num_classes
+
+        self.image_data = image_data
+        self.custom_bounds = bounds
 
     def process(self):
         with rasterio.open(self.raster_path) as src:
@@ -75,11 +78,35 @@ class RasterLayer:
         return rgba, bounds_folium
 
     def get(self):
+        # Caso dinâmico (base64)
+        if self.image_data is not None and self.custom_bounds is not None:
+            overlay = folium.raster_layers.ImageOverlay(
+                image=self.image_data,
+                bounds=self.custom_bounds,
+                name=self.name,
+                opacity=0.6
+            )
+
+            overlay.options["id"] = "riscoOverlay"
+
+            self.overlay = overlay
+            return overlay
+
+        # Caso normal
         rgba, bounds = self.process()
 
-        return folium.raster_layers.ImageOverlay(
+        overlay = folium.raster_layers.ImageOverlay(
             image=rgba,
             bounds=bounds,
             name=self.name,
             opacity=0.6
         )
+
+        overlay.options = overlay.options if hasattr(overlay, "options") else {}
+        overlay.options["id"] = "riscoOverlay"
+
+        self.overlay = overlay
+        return overlay
+    
+    def get_name(self):
+        return self.overlay.get_name()
