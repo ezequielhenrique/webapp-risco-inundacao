@@ -3,6 +3,7 @@ import geopandas as gpd
 from rasterio.mask import mask
 import rasterio
 from rasterio.warp import transform
+from pathlib import Path
 
 
 def reclassificar_raster(input_path, output_path, classes, is_categorical=False):
