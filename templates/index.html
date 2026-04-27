@@ -2,27 +2,23 @@
 {% block content %}
 
 <section>
-    <div class="input-group">
-        <h2>Selecione a cidade</h2>
-
-        <div class="analise-group">
-            <select class="cidade-input" name="cidade" id="cidade" required>
-                {% for municipio in lista_cidades %}
-                    <option value="{{ municipio }}" {% if municipio == (cidade or lista_cidades[0]) %}selected{% endif %}>
-                        {{ municipio }}
-                    </option>
-                {% endfor %}
-            </select>
+    <div class="top-bar">
+        <div class="search-group">
+            <div class="autocomplete">
+                <input id="cidade" name="cidade" placeholder="Buscar cidade..." />
+                <div id="cidade-data" data-cidades='{{ lista_cidades|tojson }}'></div>
+                <div id="suggestions" class="suggestions"></div>
+            </div>
 
             <button class="btn btn-primary" id="btn-executar">Executar análise</button>
         </div>
-        
-        <div class="ajustar-parametros">
-            <button class="btn btn-secondary" onclick="openModal()">Ajustar parâmetros</button>
-        </div>
-
-        <div id="loading"><span class="loader"></span> Processando análise...</div>
     </div>
+
+    <!--<div class="ajustar-parametros">
+        <button class="btn btn-secondary" onclick="openModal()">Ajustar parâmetros</button>
+    </div>-->
+
+    <div id="loading"><span class="loader"></span> Processando análise...</div>
 
     <div id="configModal" class="modal">
         <div class="modal-content">
@@ -52,6 +48,6 @@
 </section>
 
 
-<script src="{{ url_for('static', filename='js/script.js') }}">
-</script>
+<script src="{{ url_for('static', filename='js/script.js') }}"></script>
+<script src="{{ url_for('static', filename='js/scriptInput.js') }}"></script>
 {% endblock %}

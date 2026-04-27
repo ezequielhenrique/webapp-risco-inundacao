@@ -7,15 +7,32 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <header>
-        <h1>GeoCritério</h1>
-        <a href="{{ url_for('sobre') }}">Sobre</a>
-    </header>
-    <main>
-        {% block content %}{% endblock %}
-    </main>
-    <footer>
-        <p>© 2025 - GeoCritério</p>
-    </footer>
+    <div class="layout">
+        <header class="header">
+            <h1>GeoCritério</h1>
+            <div class="header-actions">
+                <a href="{{ url_for('sobre') }}">Sobre</a>
+            </div>
+        </header>
+
+        <aside class="sidebar">
+            <h3>Controles</h3>
+
+            <!-- Você pode mover o input pra cá depois -->
+            <div class="sidebar-section">
+                <p>Filtros</p>
+                <!-- Ex: camadas, AHP, etc -->
+            </div>
+
+            <div class="sidebar-section">
+                <p>Parâmetros</p>
+                <!-- Sliders AHP -->
+            </div>
+        </aside>
+
+        <main class="main-content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
 </body>
 </html>

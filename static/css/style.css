@@ -25,71 +25,152 @@ body {
     font-family: var(--font);
 }
 
-header {
+.layout {
+    display: grid;
+    grid-template-areas:
+        "header header"
+        "sidebar main";
+    grid-template-columns: 360px 1fr;
+    grid-template-rows: 60px 1fr;
+    height: 100vh;
+}
+
+.header {
+    grid-area: header;
     display: flex;
+    justify-content: space-between;
     align-items: center;
-    justify-content: center;
-    position: relative;
-    margin: 1rem 0;
-    width: 100%;
+    padding: 0 1rem;
+    background: var(--background-secondary-color);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
 }
 
-header > h1 {
-    font-size: 2.2rem;
-    text-align: center;
+.header h1 {
+    font-size: 1.4rem;
+    color: var(--text-color);
+}
+
+.sidebar {
+    grid-area: sidebar;
+    background: var(--background-secondary-color);
+    padding: 1rem;
+    border-right: 1px solid rgba(255,255,255,0.08);
+    overflow-y: auto;
+}
+
+.sidebar-section {
+    margin-bottom: 1.5rem;
+}
+
+.sidebar p {
     color: var(--text-secondary-color);
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
 }
 
-header > a {
-    text-decoration: none;
-    color: var(--text-secondary-color);
-    font-size: 1.15rem;
-    margin-right: 1.5rem;
-    font-weight: 500;
-    position: absolute;
-    right: 0;
-}
-
-header > a:hover {
-    color: var(--secondary-hover);
-}
-
-main {
-    max-width: 1200px;
-    margin: 0 auto;
-}
-
-.input-group {
+.main-content {
+    grid-area: main;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    text-align: center;
-    max-width: 1000px;
-    margin: 0 auto;
+    height: 100%;
 }
 
-.input-group h2 {
-    color: var(--text-color);
-    margin-bottom: 1rem;
-    font-size: 1.5rem;
-    font-weight: 600;
-}
-
-.analise-group {
+.top-bar {
     display: flex;
-    gap: 1rem;
+    align-items: center;
+    background: var(--background-secondary-color);
+    padding: 0.8rem;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    flex-shrink: 0;
 }
 
-.cidade-input {
-    font-size: 1.1rem;
-    padding: 0.5rem 1rem;
-    border: none;
-    border-radius: 5px;
-    flex: 2;
+.search-group {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    max-width: 600px;
+    gap: 0;
+    position: relative;
+}
+
+.autocomplete {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+}
+
+.autocomplete input {
+    width: 100%;
+    padding: 0.6rem 1rem;
+    border-radius: 8px 0 0 8px;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-right: none;
+    background: var(--background-color);
+    color: var(--text-color);
+    font-size: 0.95rem;
+}
+
+.autocomplete input::placeholder {
+    color: var(--text-secondary-color);
+}
+
+.autocomplete input:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 8px rgba(46,196,182,0.4);
+    outline: none;
+}
+
+.suggestions {
+    position: absolute;
+    top: 110%;
+    left: 0;
+    right: 0;
+    width: 100%;
+    z-index: 5; 
+    background: var(--background-secondary-color);
+    border-radius: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    display: none;
+    z-index: 10;
+}
+
+.suggestions div {
+    padding: 0.6rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: var(--text-color);
+}
+
+.suggestions div:hover {
+    background: rgba(255,255,255,0.05);
 }
 
 #btn-executar {
+    white-space: nowrap;
+    padding: 0.6rem 1.2rem;
+    border-radius: 0 8px 8px 0;
+    border: 1px solid rgba(255,255,255,0.08);
+    font-size: 0.95rem;
+    position: relative;
+    z-index: 10;
+}
+
+#mapa-container {
     flex: 1;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+}
+
+#mapa-container iframe,
+#mapa-container > div {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.leaflet-container {
+    height: 100% !important;
 }
 
 .btn {
@@ -114,14 +195,6 @@ main {
 
 .btn-secondary:hover {
     background: var(--secondary-hover);
-}
-
-.ajustar-parametros {
-    margin-top: 1rem;
-}
-
-.ajustar-parametros button {
-    width: 100%;
 }
 
 #loading {
@@ -281,12 +354,6 @@ main {
 
 .close:hover {
     color: var(--secondary-hover);
-}
-
-#mapa-container {
-    margin: 1.5rem auto;
-    max-width: 1000px;
-    max-height: 600px;
 }
 
 .sobre-section {

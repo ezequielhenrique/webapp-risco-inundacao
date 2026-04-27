@@ -26,7 +26,7 @@ municipios = MunicipioService("dados/PE_Municipios_2023/PE_Municipios_2023.shp")
 def index():
     lista_cidades = municipios.get_nome_cidades()
 
-    mapa = MapaService(center=[-8.38, -37.86])
+    mapa = MapaService(center=[-8.38, -37.86], zoom=5)
     mapa.add_base_layer()
     mapa.add_layer_control()
 
