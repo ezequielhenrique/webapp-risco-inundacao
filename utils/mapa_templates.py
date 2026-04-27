@@ -219,7 +219,7 @@ def get_sliders_script(cidade, overlay_name, w_uso0, w_decl0, w_flux0, w_hipso0)
                                 {overlay_name}.setUrl(data.url);
 
                             }} else {{
-                                alert(data.mensagem);
+                                showAlert(data.mensagem);
                             }}
 
                             status.innerText = "Arraste os sliders para atualizar o mapa";

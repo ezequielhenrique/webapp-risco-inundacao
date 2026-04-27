@@ -38,12 +38,12 @@ document.getElementById("btn-executar").addEventListener("click", function() {
         if (data.status === "ok") {
             mapaContainer.innerHTML = data.mapa_html;
         } else {
-            alert("Erro: " + data.mensagem);
+            showAlert("Erro: " + data.mensagem);
         }
     })
     .catch(err => {
         console.error(err);
-        alert("Erro ao processar análise");
+        showAlert("Erro ao processar análise");
     })
     .finally(() => {
         modal.classList.add("hidden");

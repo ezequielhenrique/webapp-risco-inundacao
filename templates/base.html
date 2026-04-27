@@ -7,6 +7,8 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
+    <div id="alert-container"></div>
+
     <div class="layout">
         <header class="header">
             <h1>GeoCritério</h1>
@@ -16,9 +18,8 @@
         </header>
 
         <aside class="sidebar">
-            <h3>Controles</h3>
+            <p>Controles</p>
 
-            <!-- Você pode mover o input pra cá depois -->
             <div class="sidebar-section">
                 <p>Filtros</p>
                 <!-- Ex: camadas, AHP, etc -->
@@ -41,5 +42,9 @@
             <p>Processando análise...</p>
         </div>
     </div>
+
+    <script src="{{ url_for('static', filename='js/notifications.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/scriptInput.js') }}"></script>
 </body>
 </html>
