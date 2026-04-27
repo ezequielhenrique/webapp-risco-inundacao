@@ -23,20 +23,18 @@ window.onclick = function(event) {
 
 document.getElementById("btn-executar").addEventListener("click", function() {
     let cidade = document.getElementById("cidade").value;
-    let loading = document.getElementById("loading");
     let mapaContainer = document.getElementById("mapa-container");
+    let modal = document.getElementById("loadingModal");
 
-    loading.style.display = "block";
-    mapaContainer.innerHTML = "";
+    modal.classList.remove("hidden");
 
     fetch("/executar_analise", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({cidade: cidade})
+        body: JSON.stringify({ cidade: cidade })
     })
     .then(res => res.json())
     .then(data => {
-        loading.style.display = "none";
         if (data.status === "ok") {
             mapaContainer.innerHTML = data.mapa_html;
         } else {
@@ -44,8 +42,11 @@ document.getElementById("btn-executar").addEventListener("click", function() {
         }
     })
     .catch(err => {
-        loading.style.display = "none";
+        console.error(err);
         alert("Erro ao processar análise");
+    })
+    .finally(() => {
+        modal.classList.add("hidden");
     });
 });
 
