@@ -10,6 +10,10 @@ import tempfile
 import numpy as np
 import rasterio
 
+from utils.utils import load_config
+from utils.paths import path_output
+from utils.raster_utils import reclassificar_raster, recortar_raster
+
 
 class AnaliseFluxo(AnaliseBase):
 
@@ -118,7 +122,13 @@ class AnaliseFluxo(AnaliseBase):
                     "Tente rodar novamente; se persistir, verifique o WhiteboxTools e apague outputs/fluxo_acumulado/*.tif."
                 )
         
-        return path_output('fluxo_acumulado', self.cidade)
+        config = load_config()
+            
+        reclassificar_raster(
+                path_output('fluxo_acumulado', self.cidade),
+                path_output('fluxo_acumulado', self.cidade, '_reclass'),
+                config["criterios"]["fluxo_acumulado"]["classes"]
+            )
     
     def _normalize_nodata_for_whitebox(self, input_tif: str, output_tif: str, nodata_value: float = -9999.0) -> float:
         """Garante que o raster tenha um NoData numérico (Whitebox não lida bem com NaN)."""

@@ -8,12 +8,11 @@ from services.mapa.layers.municipio_layer import MunicipioLayer
 from services.mapa.layers.raster_layer import RasterLayer
 from services.mapa.layers.pontos_alagamento_layer import PontosAlagamentoLayer
 from services.mapa.layers.uso_solo_layer import UsoSoloLayer
+from services.ahp_service import AHPService
 
 from utils.utils import load_config, save_config, slug_cidade
 from utils.uso_solo_classes import USO_SOLO_CLASSES
-
-import rasterio
-from rasterio.warp import transform
+from utils.raster_utils import sample_raster
 
 
 app = Flask(__name__)
@@ -40,6 +39,7 @@ def index():
 def executar_analise():
     payload = request.get_json(silent=True) or {}
     cidade = payload.get("cidade")
+    pesos = payload.get("pesos")
 
     if not cidade:
         return jsonify({"status": "erro", "mensagem": "Nenhuma cidade informada"}), 400
@@ -48,7 +48,7 @@ def executar_analise():
         gdf = municipios.get_gdf(cidade)
 
         analise = AnaliseService()
-        raster_path = analise.executar(cidade, gdf)
+        raster_path = analise.executar(cidade, gdf, pesos=pesos)
 
         centro = gdf.geometry.centroid.iloc[0]
 
@@ -68,10 +68,17 @@ def executar_analise():
         mapa_service.add_layer(
             RasterLayer(
                 raster_path,
-                colormap="RdYlGn_r",
-                name="Risco de Alagamento"
+                colormap='RdYlGn_r',
+                name='Risco de Alagamento',
+                tipo='classes',
+                num_classes=4
             ).get()
         )
+
+        ahp = AHPService()
+        pesos, cr = ahp.calcular_pesos()
+
+        mapa_service.add_ahp_sliders(pesos, slug_cidade(cidade))
 
         pontos = [
             ("Rua Imperial, bairro de São José", -8.07581, -34.89415),
@@ -88,6 +95,7 @@ def executar_analise():
 
         mapa_service.add_default_plugins()
         mapa_service.add_layer_control()
+        mapa_service.add_legend()
         mapa_service.add_click_popup()
 
         return jsonify({"status": "ok", "mapa_html": mapa_service.render()})
@@ -146,20 +154,6 @@ def get_pixel_info():
     lon = data['lon']
 
     valores = {}
-
-    def sample_raster(path, lon, lat):
-        with rasterio.open(path) as src:
-            xs, ys = transform("EPSG:4326", src.crs, [lon], [lat])
-
-            nodata = src.nodata
-
-            for val in src.sample([(xs[0], ys[0])]):
-                v = float(val[0])
-
-                if nodata is not None and v == nodata:
-                    return None
-
-                return v
 
     valores["risco"] = sample_raster(f"outputs/mapas_de_risco/risco_alagamento_{cidade}_recortado.tif", lon, lat)
     valores["uso_solo"] = sample_raster(f"outputs/uso_do_solo/uso_do_solo_{cidade}.tif", lon, lat)

@@ -2,6 +2,7 @@ import numpy as np
 import geopandas as gpd
 from rasterio.mask import mask
 import rasterio
+from rasterio.warp import transform
 
 
 def reclassificar_raster(input_path, output_path, classes, is_categorical=False):
@@ -59,3 +60,18 @@ def recortar_raster(shapefile_path, input_path, output_path):
 
     with rasterio.open(output_path, "w", **out_meta) as dst:
         dst.write(out_image)
+
+
+def sample_raster(path, lon, lat):
+        with rasterio.open(path) as src:
+            xs, ys = transform("EPSG:4326", src.crs, [lon], [lat])
+
+            nodata = src.nodata
+
+            for val in src.sample([(xs[0], ys[0])]):
+                v = float(val[0])
+
+                if nodata is not None and v == nodata:
+                    return None
+
+                return v

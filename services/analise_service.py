@@ -2,12 +2,12 @@ from services.analise.analise_declividade import AnaliseDeclividade
 from services.analise.analise_fluxo import AnaliseFluxo
 from services.analise.analise_uso_solo import AnaliseUsoSolo
 from services.analise.analise_raster import AnaliseRaster
+from services.analise.analise_hipsometria import AnaliseHipsometria
 
 from services.ahp_service import AHPService
 
 from utils.utils import load_config, slug_cidade
-from utils.paths import path_output
-from utils.raster_utils import reclassificar_raster, recortar_raster
+from utils.raster_utils import recortar_raster
 
 import rasterio
 
@@ -17,7 +17,7 @@ class AnaliseService:
         self.cidade = None
         self.crs = None
 
-    def executar(self, nome_cidade, gdf_municipio):
+    def executar(self, nome_cidade, gdf_municipio, pesos=None):
         config = load_config()
 
         self.cidade = slug_cidade(nome_cidade)
@@ -28,46 +28,31 @@ class AnaliseService:
         AnaliseRaster(self.cidade, self.crs).executar()
 
         if config["criterios"]["declividade"]["ativo"]:
-            analise_declividade = AnaliseDeclividade(self.cidade, self.crs).executar()
+            AnaliseDeclividade(self.cidade, self.crs).executar()
 
-            reclassificar_raster(
-                analise_declividade,
-                path_output('declividade', self.cidade, '_reclass'),
-                config["criterios"]["declividade"]["classes"]
-            )
-        
         if config["criterios"]["fluxo_acumulado"]["ativo"]:
-            analise_fluxo = AnaliseFluxo(self.cidade, self.crs).executar()
-
-            reclassificar_raster(
-                analise_fluxo,
-                path_output('fluxo_acumulado', self.cidade, '_reclass'),
-                config["criterios"]["fluxo_acumulado"]["classes"]
-            )
+            AnaliseFluxo(self.cidade, self.crs).executar()
 
         if config["criterios"]["uso_do_solo"]["ativo"]:
             analise_uso = AnaliseUsoSolo(self.cidade, self.crs).executar()
-
-            reclassificar_raster(
-                analise_uso,
-                path_output('uso_do_solo', self.cidade, '_reclass'),
-                config["criterios"]["uso_do_solo"]["classes"],
-                is_categorical=True
-            )
 
             uso_recortado_path = f"outputs/uso_do_solo/uso_do_solo_{self.cidade}_recortado.tif"
 
             recortar_raster(shapefile, analise_uso, uso_recortado_path)
 
         if config["criterios"]["hipsometria"]["ativo"]:
-            reclassificar_raster(
-                path_output('mde', self.cidade),
-                path_output('hipsometria', self.cidade, '_reclass'),
-                config["criterios"]["hipsometria"]["classes"],
-            )
+            AnaliseHipsometria(self.cidade, self.crs).executar()
 
-        ahp = AHPService()
-        pesos, cr = ahp.calcular_pesos()
+        if pesos:
+            pesos = [
+                pesos["uso"],
+                pesos["declividade"],
+                pesos["fluxo"],
+                pesos["hipsometria"]
+            ]
+        else:
+            ahp = AHPService()
+            pesos, cr = ahp.calcular_pesos()
 
         self._gerar_mapa_risco(pesos)
 

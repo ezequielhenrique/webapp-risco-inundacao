@@ -2,6 +2,10 @@ from services.analise.analise_base import AnaliseBase
 import rasterio
 from rasterio.warp import reproject, Resampling
 
+from utils.utils import load_config
+from utils.paths import path_output
+from utils.raster_utils import reclassificar_raster
+
 
 class AnaliseUsoSolo(AnaliseBase):
 
@@ -36,5 +40,14 @@ class AnaliseUsoSolo(AnaliseBase):
                         dst_crs=crs,
                         resampling=Resampling.nearest
                     )
+        
+        config = load_config()
+        
+        reclassificar_raster(
+            output,
+            path_output('uso_do_solo', self.cidade, '_reclass'),
+            config["criterios"]["uso_do_solo"]["classes"],
+            is_categorical=True
+        )
 
         return output
