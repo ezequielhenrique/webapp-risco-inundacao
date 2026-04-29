@@ -4,6 +4,10 @@ import matplotlib.pyplot as plt
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 import folium
 
+import base64
+from io import BytesIO
+from PIL import Image
+
 
 class RasterLayer:
     def __init__(self, raster_path, colormap="RdYlGn_r", name="Raster", tipo="continuo", num_classes=4, image_data=None, bounds=None):
@@ -39,8 +43,7 @@ class RasterLayer:
             data = np.ma.masked_equal(data_reproj, nodata)
             bounds = rasterio.transform.array_bounds(height, width, transform)
 
-        # NORMALIZAÇÃO / CLASSIFICAÇÃO
-
+        # normalização (igual você já fez)
         vmin = data.min()
         vmax = data.max()
 
@@ -58,24 +61,19 @@ class RasterLayer:
                     else:
                         mask = (data >= lower)
 
-                    # valor central da classe
-                    norm_value = (i + 0.5) / self.num_classes
-                    norm_data[mask] = norm_value
+                    norm_data[mask] = (i + 0.5) / self.num_classes
             else:
                 norm_data = np.zeros_like(data, dtype=np.float32)
-
         else:
-            # contínuo
             norm_data = (data - vmin) / (vmax - vmin)
-
-        # COLORIZAÇÃO
 
         cmap = plt.get_cmap(self.colormap)
         rgba = (cmap(norm_data) * 255).astype(np.uint8)
 
         bounds_folium = [[bounds[1], bounds[0]], [bounds[3], bounds[2]]]
 
-        return rgba, bounds_folium
+        self.rgba = rgba
+        self.bounds = bounds_folium
 
     def get(self):
         # Caso dinâmico (base64)
@@ -110,3 +108,21 @@ class RasterLayer:
     
     def get_name(self):
         return self.overlay.get_name()
+    
+    def get_bounds(self):
+        if not hasattr(self, "bounds"):
+            self.process()
+        return self.bounds
+    
+    def get_image_url(self):
+        if not hasattr(self, "rgba"):
+            self.process()
+
+        img = Image.fromarray(self.rgba)
+
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+
+        img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+        return f"data:image/png;base64,{img_base64}"

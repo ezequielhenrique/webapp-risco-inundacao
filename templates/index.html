@@ -1,49 +1,78 @@
-{% extends "base.html" %}
-{% block content %}
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title if title else "GeoCritério" }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+</head>
+<body>
+    <div id="alert-container"></div>
 
-<section>
-    <div class="top-bar">
-        <div class="search-group">
-            <div class="autocomplete">
-                <input id="cidade" name="cidade" placeholder="Buscar cidade..." />
-                <div id="cidade-data" data-cidades='{{ lista_cidades|tojson }}'></div>
-                <div id="suggestions" class="suggestions"></div>
+    <div class="app">
+
+        <div id="mapa-container">
+            <div id="map"></div>
+        </div>
+
+        <header class="header">
+            <button id="menu-toggle" class="menu-btn">☰</button>
+            <h1>GeoCritério</h1>
+
+            <div class="search-group">
+                <div class="autocomplete">
+                    <input id="cidade" name="cidade" placeholder="Buscar cidade..." />
+                    <div id="cidade-data" data-cidades='{{ lista_cidades|tojson }}'></div>
+                    <div id="suggestions" class="suggestions"></div>
+                </div>
+
+                <button class="btn btn-primary" id="btn-executar">Executar análise</button>
             </div>
 
-            <button class="btn btn-primary" id="btn-executar">Executar análise</button>
+            <div class="header-actions">
+                <a href="{{ url_for('sobre') }}">Sobre</a>
+            </div>
+        </header>
+
+        <div id="overlay" class="overlay"></div>
+        <aside id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h2>Controles</h2>
+                <button id="close-sidebar" class="close-btn">✕</button>
+            </div>
+
+            <p>Filtros</p>
+            <p>Parâmetros</p>
+        </aside>
+
+        <div id="legend" class="map-ui hidden">
+            <p>Risco de Alagamento</p>
+            <i class="legend-color" style="background:#d73027"></i> Alto<br>
+            <i class="legend-color" style="background:#ffffb2"></i> Moderado<br>
+            <i class="legend-color" style="background:#78c679"></i> Baixo<br>
+            <i class="legend-color" style="background:#006837"></i> Muito Baixo<br>
+        </div>
+
+        <!-- SLIDERS -->
+        <div id="sliders" class="map-ui hidden">
+            <button id="toggle-ahp">Ajustes AHP</button>
+            <div id="ahp-panel" class="hidden"></div>
+        </div>
+
+    </div>
+
+    <div id="loadingModal" class="loading-modal hidden">
+        <div class="loading-box">
+            <span class="loader"></span>
+            <p>Processando análise...</p>
         </div>
     </div>
 
-    <!--<div class="ajustar-parametros">
-        <button class="btn btn-secondary" onclick="openModal()">Ajustar parâmetros</button>
-    </div>-->
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 
-    <div id="loading"><span class="loader"></span> Processando análise...</div>
-
-    <div id="configModal" class="modal">
-        <div class="modal-content">
-            <span class="close" onclick="closeModal()">&times;</span>
-            <h2 class="modal-title">Configurações</h2>
-
-            <form class="modal-form" method="POST" action="{{ url_for('config') }}">
-
-                <p class="modal-subtitle">Pesos AHP</p>
-                <div id="criteriaContainer"></div>
-
-                <p class="modal-subtitle">Classes</p>
-                <div id="classesContainer"></div>
-
-                <br><br>
-
-                <button class="btn btn-primary" type="submit">Salvar Configurações</button>
-            </form>
-        </div>
-    </div>
-
-    <div id="mapa-container">
-        {% if mapa_html %}
-            {{ mapa_html|safe }}
-        {% endif %}
-    </div>
-</section>
-{% endblock %}
+    <script src="{{ url_for('static', filename='js/notifications.js') }}"></script>
+    <script  type="module" src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/scriptInput.js') }}"></script>
+</body>
+</html>

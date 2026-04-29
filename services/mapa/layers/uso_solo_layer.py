@@ -1,7 +1,10 @@
 import rasterio
 import numpy as np
-import folium
 from rasterio.warp import calculate_default_transform, reproject, Resampling
+
+import base64
+from io import BytesIO
+from PIL import Image
 
 
 class UsoSoloLayer:
@@ -57,16 +60,6 @@ class UsoSoloLayer:
 
         return rgba, bounds_folium
 
-    def get(self):
-        rgba, bounds = self.process()
-
-        return folium.raster_layers.ImageOverlay(
-            image=rgba,
-            bounds=bounds,
-            name=self.name,
-            opacity=0.7
-        )
-
     def get_legenda_dict(self):
         return {
             class_id: {
@@ -75,3 +68,26 @@ class UsoSoloLayer:
             }
             for class_id, (nome, cor) in self.legenda.items()
         }
+    
+    def _ensure_processed(self):
+        if not hasattr(self, "_cache"):
+            rgba, bounds = self.process()
+            self._cache = (rgba, bounds)
+
+    def get_bounds(self):
+        self._ensure_processed()
+        return self._cache[1]
+
+    def get_image_url(self):
+        self._ensure_processed()
+        rgba = self._cache[0]
+
+        img = Image.fromarray(rgba)
+
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        img_base64 = base64.b64encode(buffer.read()).decode("utf-8")
+
+        return f"data:image/png;base64,{img_base64}"

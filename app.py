@@ -1,12 +1,9 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 
 from services.municipio_service import MunicipioService
-from services.mapa.mapa_service import MapaService
 from services.analise_service import AnaliseService
 
-from services.mapa.layers.municipio_layer import MunicipioLayer
 from services.mapa.layers.raster_layer import RasterLayer
-from services.mapa.layers.pontos_alagamento_layer import PontosAlagamentoLayer
 from services.mapa.layers.uso_solo_layer import UsoSoloLayer
 from services.ahp_service import AHPService
 
@@ -26,15 +23,10 @@ municipios = MunicipioService("dados/PE_Municipios_2023/PE_Municipios_2023.shp")
 def index():
     lista_cidades = municipios.get_nome_cidades()
 
-    mapa = MapaService(center=[-8.38, -37.86], zoom=5)
-    mapa.add_base_layer()
-    mapa.add_layer_control()
-
     return render_template(
         "index.html", 
         cidade=None, 
         lista_cidades=lista_cidades, 
-        mapa_html=mapa.render()
     )
 
 
@@ -55,18 +47,10 @@ def executar_analise():
 
         centro = gdf.geometry.centroid.iloc[0]
 
-        mapa_service = MapaService(center=[centro.y, centro.x], cidade=cidade)
-
-        mapa_service.add_base_layer()
-
-        mapa_service.add_layer(MunicipioLayer(gdf).get())
-
-        mapa_service.add_layer(
-            UsoSoloLayer(
+        uso_layer = UsoSoloLayer(
                 raster_path=f"outputs/uso_do_solo/uso_do_solo_{slug_cidade(cidade)}_recortado.tif",
                 legenda=USO_SOLO_CLASSES
-            ).get()
-        )
+            )
 
         raster_layer = RasterLayer(
                 raster_path,
@@ -75,17 +59,17 @@ def executar_analise():
                 tipo='classes',
                 num_classes=4
             )
-        
-        overlay = raster_layer.get()
-        mapa_service.add_layer(overlay)
-
-        overlay_name = overlay.get_name()
 
         if not pesos:
             ahp = AHPService()
             pesos, cr = ahp.calcular_pesos()
 
-        mapa_service.add_ahp_sliders(pesos, slug_cidade(cidade), overlay_name)
+        pesos_dict = {
+            "uso": float(pesos[0]),
+            "declividade": float(pesos[1]),
+            "fluxo": float(pesos[2]),
+            "hipsometria": float(pesos[3]),
+        }
 
         pontos = [
             ("Rua Imperial, bairro de São José", -8.07581, -34.89415),
@@ -98,14 +82,16 @@ def executar_analise():
             ("Av. Norte Miguel Arraes de Alencar, ao lado do Senai", -8.04713, -34.87757)
         ]
 
-        mapa_service.add_layer(PontosAlagamentoLayer(pontos).get())
-
-        mapa_service.add_default_plugins()
-        mapa_service.add_layer_control()
-        mapa_service.add_legend()
-        mapa_service.add_click_popup()
-
-        return jsonify({"status": "ok", "mapa_html": mapa_service.render()})
+        return jsonify({
+            "status": "ok", 
+            "cidade": cidade,
+            "centro": [centro.y, centro.x],
+            "pesos": pesos_dict,
+            "overlay_url": raster_layer.get_image_url(),
+            "bounds": raster_layer.get_bounds(),
+            "uso_url": uso_layer.get_image_url(),
+            "uso_bounds": uso_layer.get_bounds()
+        })
     
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500

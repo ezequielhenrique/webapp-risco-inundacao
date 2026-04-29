@@ -4,8 +4,11 @@ TEMPLATE_LEGENDA = """
                 position: fixed;
                 bottom: 20px;
                 left: 20px;
-                width: 150px;
-                height: 160px;
+                width: auto;
+                min-width: 140px;
+                max-width: 220px;
+                height: auto;
+                box-sizing: border-box;
                 z-index:9999;
                 font-size:14px;
                 background-color: white;
@@ -85,6 +88,8 @@ def get_sliders_html(w_uso0, w_decl0, w_flux0, w_hipso0):
     return f"""
             <div style="
                 width: 100%;
+                max-width: 100%;
+                box-sizing: border-box;
                 font-size: 13px;
                 background-color: white;
                 border: 2px solid grey;
@@ -146,7 +151,10 @@ def get_sliders_template(sliders_html):
             position: fixed;
             bottom: 20px;
             right: 20px;
-            width: 260px;
+            width: auto;
+            min-width: 240px;
+            max-width: 320px;
+            box-sizing: border-box;
             z-index: 9999;
             font-size: 13px;
             background-color: white;
