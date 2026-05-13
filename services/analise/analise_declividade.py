@@ -2,15 +2,13 @@ from services.analise.analise_base import AnaliseBase
 import rasterio
 import numpy as np
 
-from utils.utils import load_config
 from utils.paths import path_output
 from utils.raster_utils import reclassificar_raster
 
 
 class AnaliseDeclividade(AnaliseBase):
 
-    def executar(self):
-        config = load_config()
+    def executar(self, classes):
 
         path_mde = f"outputs/mde/mde_{self.cidade}.tif"
         output = f"outputs/declividade/declividade_{self.cidade}.tif"
@@ -36,6 +34,6 @@ class AnaliseDeclividade(AnaliseBase):
         reclassificar_raster(
                 output,
                 path_output('declividade', self.cidade, '_reclass'),
-                config["criterios"]["declividade"]["classes"]
+                classes
             )
 

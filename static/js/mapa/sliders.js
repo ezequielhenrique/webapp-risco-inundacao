@@ -3,7 +3,7 @@ import { debounce } from "./utils.js";
 
 
 export function initSliders(data) {
-    const { cidade, pesos } = data;
+    const { cidade, config } = data;
 
     const container = document.getElementById("ahp-panel");
 
@@ -20,10 +20,10 @@ export function initSliders(data) {
 
             <button id="w_reset_btn">Resetar</button>
 
-            ${createSlider("uso", "Uso do solo", pesos.uso)}
-            ${createSlider("decl", "Declividade", pesos.declividade)}
-            ${createSlider("flux", "Fluxo", pesos.fluxo)}
-            ${createSlider("hipso", "Hipsometria", pesos.hipsometria)}
+            ${createSlider("uso", "Uso do solo", config.pesos.uso)}
+            ${createSlider("decl", "Declividade", config.pesos.declividade)}
+            ${createSlider("flux", "Fluxo", config.pesos.fluxo)}
+            ${createSlider("hipso", "Hipsometria", config.pesos.hipsometria)}
 
             <span id="w_status">Arraste para atualizar</span>
         </div>
@@ -31,9 +31,28 @@ export function initSliders(data) {
 
     function createSlider(id, label, value) {
         return `
-            <div>
-                <label>${label}: <span id="w_${id}_val">${value.toFixed(3)}</span></label>
-                <input id="w_${id}" type="range" min="0" max="1" step="0.0001" value="${value}">
+            <div class="slider-group">
+
+                <div class="slider-header">
+                    <span>${label}</span>
+
+                    <span
+                        class="slider-value"
+                        id="w_${id}_val"
+                    >
+                        ${value.toFixed(3)}
+                    </span>
+                </div>
+
+                <input
+                    id="w_${id}"
+                    class="custom-slider"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.0001"
+                    value="${value}"
+                >
             </div>
         `;
     }

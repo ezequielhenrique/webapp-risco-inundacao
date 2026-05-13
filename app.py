@@ -1,13 +1,12 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify
+from flask import Flask, render_template, request, jsonify
 
 from services.municipio_service import MunicipioService
 from services.analise_service import AnaliseService
 
 from services.mapa.layers.raster_layer import RasterLayer
 from services.mapa.layers.uso_solo_layer import UsoSoloLayer
-from services.ahp_service import AHPService
 
-from utils.utils import load_config, save_config, slug_cidade
+from utils.utils import slug_cidade
 from utils.uso_solo_classes import USO_SOLO_CLASSES
 from utils.raster_utils import sample_raster
 from utils.slider_utils import risk_overlay_png_data_url
@@ -34,7 +33,7 @@ def index():
 def executar_analise():
     payload = request.get_json(silent=True) or {}
     cidade = payload.get("cidade")
-    pesos = payload.get("pesos")
+    config = payload.get("config")
 
     if not cidade:
         return jsonify({"status": "erro", "mensagem": "Nenhuma cidade informada"}), 400
@@ -43,7 +42,10 @@ def executar_analise():
         gdf = municipios.get_gdf(cidade)
 
         analise = AnaliseService()
-        raster_path = analise.executar(cidade, gdf, pesos=pesos)
+        resultado = analise.executar(cidade, gdf, config=config)
+
+        raster_path = resultado["risco_path"]
+        config = resultado["config"]
 
         centro = gdf.geometry.centroid.iloc[0]
 
@@ -60,17 +62,6 @@ def executar_analise():
                 num_classes=4
             )
 
-        if not pesos:
-            ahp = AHPService()
-            pesos, cr = ahp.calcular_pesos()
-
-        pesos_dict = {
-            "uso": float(pesos[0]),
-            "declividade": float(pesos[1]),
-            "fluxo": float(pesos[2]),
-            "hipsometria": float(pesos[3]),
-        }
-
         pontos = [
             ("Rua Imperial, bairro de São José", -8.07581, -34.89415),
             ("Rua Nicolau Pereira", -8.07804, -34.90558),
@@ -86,7 +77,7 @@ def executar_analise():
             "status": "ok", 
             "cidade": cidade,
             "centro": [centro.y, centro.x],
-            "pesos": pesos_dict,
+            "config": config,
             "overlay_url": raster_layer.get_image_url(),
             "bounds": raster_layer.get_bounds(),
             "uso_url": uso_layer.get_image_url(),
@@ -95,47 +86,6 @@ def executar_analise():
     
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
-
-
-@app.route("/config", methods=["POST"])
-def config():
-    config = load_config()
-
-    # Atualizar pesos AHP
-    config["pesos"] = {}
-    for key, value in request.form.items():
-        if key.startswith("pesos[") and key.endswith("]"):
-            nome = key[6:-1]  # remove "pesos[" e "]"
-            config["pesos"][nome] = float(value)
-
-    # Atualizar classes intervalares
-    for criterio in config["criterios"]:
-        if isinstance(config["criterios"][criterio]["classes"], list):
-            nova_classes = []
-            i = 0
-            while f"{criterio}[{i}][min]" in request.form:
-                min_val = request.form.get(f"{criterio}[{i}][min]", "")
-                max_val = request.form.get(f"{criterio}[{i}][max]", "")
-                valor = request.form.get(f"{criterio}[{i}][valor]", "")
-                nova_classes.append({
-                    "min": float(min_val) if min_val else None,
-                    "max": float(max_val) if max_val else None,
-                    "valor": float(valor) if valor else None
-                })
-                i += 1
-            config["criterios"][criterio]["classes"] = nova_classes
-
-    # Atualizar classes categóricas (uso_do_solo)
-    for criterio in config["criterios"]:
-        if isinstance(config["criterios"][criterio]["classes"], dict):
-            for nomeClasse in config["criterios"][criterio]["classes"]:
-                ids = request.form.get(f"{criterio}[{nomeClasse}][ids]", "")
-                valor = request.form.get(f"{criterio}[{nomeClasse}][valor]", "")
-                config["criterios"][criterio]["classes"][nomeClasse]["ids"] = [int(x.strip()) for x in ids.split(",") if x.strip()]
-                config["criterios"][criterio]["classes"][nomeClasse]["valor"] = float(valor) if valor else None
-
-    save_config(config)
-    return redirect(url_for("index"))
 
 
 @app.route("/valor_ponto", methods=["POST"])
@@ -181,8 +131,12 @@ def overlay_risco():
         slug = slug_cidade(cidade)
         url = risk_overlay_png_data_url(slug, w)
         return jsonify({"status": "ok", "url": url, "w": w.tolist()})
+    
     except Exception as e:
-        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+        return jsonify({
+            "status": "erro", 
+            "mensagem": str(e)
+        }), 500
 
 
 @app.route("/sobre", methods=["GET"])

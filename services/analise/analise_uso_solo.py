@@ -2,14 +2,13 @@ from services.analise.analise_base import AnaliseBase
 import rasterio
 from rasterio.warp import reproject, Resampling
 
-from utils.utils import load_config
 from utils.paths import path_output
 from utils.raster_utils import reclassificar_raster
 
 
 class AnaliseUsoSolo(AnaliseBase):
 
-    def executar(self):
+    def executar(self, classes):
         uso_src = "dados/uso-do-solo-pernambuco-2023.tif"
         moldura = f"outputs/molduras_municipios/moldura-{self.cidade}.tif"
         output = f"outputs/uso_do_solo/uso_do_solo_{self.cidade}.tif"
@@ -41,12 +40,10 @@ class AnaliseUsoSolo(AnaliseBase):
                         resampling=Resampling.nearest
                     )
         
-        config = load_config()
-        
         reclassificar_raster(
             output,
             path_output('uso_do_solo', self.cidade, '_reclass'),
-            config["criterios"]["uso_do_solo"]["classes"],
+            classes,
             is_categorical=True
         )
 

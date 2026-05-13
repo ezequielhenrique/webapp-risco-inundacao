@@ -9,10 +9,8 @@ import numpy as np
 
 class AnaliseHipsometria(AnaliseBase):
 
-    def executar(self):
+    def executar(self, classes):
         mde_path = path_output('mde', self.cidade)
-
-        classes = self._calcular_classes_hipsometria(mde_path)
 
         reclassificar_raster(
                 mde_path,
@@ -20,7 +18,7 @@ class AnaliseHipsometria(AnaliseBase):
                 classes,
             )
     
-    def _calcular_classes_hipsometria(self, mde_path):
+    def gerar_classes(self):
         """
         Calcula classes de hipsometria.
 
@@ -31,6 +29,8 @@ class AnaliseHipsometria(AnaliseBase):
             Lista de classes no formato:
             [{"min": float, "max": float|None, "valor": float}]
         """
+
+        mde_path = path_output('mde', self.cidade)
 
         if self.cidade == "recife":
             return [

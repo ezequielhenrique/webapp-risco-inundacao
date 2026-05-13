@@ -1,5 +1,3 @@
-from utils.utils import load_config
-
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 import rasterio
 from pathlib import Path
@@ -13,7 +11,7 @@ import io
 _CITY_COLOR_SCALE: dict[str, tuple[float, float]] = {}
 
 
-def risk_overlay_png_data_url(slug: str, w: np.ndarray) -> str:
+def risk_overlay_png_data_url(slug: str, w: np.ndarray, usar_classes=True) -> str:
     """Gera um PNG RGBA (base64) do risco recalculado com pesos w (4 elementos, soma=1)."""
 
     # Referência: raster de risco recortado (define o footprint/bounds do overlay no front)
@@ -34,11 +32,6 @@ def risk_overlay_png_data_url(slug: str, w: np.ndarray) -> str:
         raise FileNotFoundError(
             "Arquivos reclassificados ausentes (execute a análise da cidade primeiro): " + ", ".join(missing)
         )
-
-    # Determinar tipo de visualização a partir da config
-    config = load_config() or {}
-    tipo_risco = ((config.get("visualizacao") or {}).get("tipo_risco") or "continuo").lower()
-    usar_classes_4 = tipo_risco == "classes_4"
 
     # 1) Recalcular risco no mesmo grid dos rasters reclassificados
     with rasterio.open(uso_reclass) as s0, rasterio.open(decl_reclass) as s1, rasterio.open(fluxo_reclass) as s2, rasterio.open(hipso_reclass) as s3:
@@ -143,7 +136,7 @@ def risk_overlay_png_data_url(slug: str, w: np.ndarray) -> str:
         if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax == vmin:
             norm_data = np.zeros_like(dst, dtype=np.float32)
         else:
-            if usar_classes_4:
+            if usar_classes:
                 # Reclassificar em 4 classes discretas baseadas nos percentis do intervalo [vmin, vmax]
                 intervalo = (vmax - vmin) / 4.0
                 norm_data = np.zeros_like(dst, dtype=np.float32)

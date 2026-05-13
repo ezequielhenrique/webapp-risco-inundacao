@@ -10,14 +10,13 @@ import tempfile
 import numpy as np
 import rasterio
 
-from utils.utils import load_config
 from utils.paths import path_output
 from utils.raster_utils import reclassificar_raster, recortar_raster
 
 
 class AnaliseFluxo(AnaliseBase):
 
-    def executar(self):
+    def executar(self, classes):
         """Calcula fluxo acumulado (D8) a partir do MDE já alinhado em outputs/mde/.
 
         Saída: outputs/fluxo_acumulado/fluxo_acumulado_<cidade>.tif
@@ -121,13 +120,11 @@ class AnaliseFluxo(AnaliseBase):
                     f"MDE: {ref.width}x{ref.height}, Fluxo: {out.width}x{out.height}. "
                     "Tente rodar novamente; se persistir, verifique o WhiteboxTools e apague outputs/fluxo_acumulado/*.tif."
                 )
-        
-        config = load_config()
             
         reclassificar_raster(
                 path_output('fluxo_acumulado', self.cidade),
                 path_output('fluxo_acumulado', self.cidade, '_reclass'),
-                config["criterios"]["fluxo_acumulado"]["classes"]
+                classes
             )
     
     def _normalize_nodata_for_whitebox(self, input_tif: str, output_tif: str, nodata_value: float = -9999.0) -> float:

@@ -5,8 +5,9 @@ from services.analise.analise_raster import AnaliseRaster
 from services.analise.analise_hipsometria import AnaliseHipsometria
 
 from services.ahp_service import AHPService
+from services.config_service import ConfigService
 
-from utils.utils import load_config, slug_cidade
+from utils.utils import slug_cidade
 from utils.raster_utils import recortar_raster
 
 import rasterio
@@ -17,8 +18,7 @@ class AnaliseService:
         self.cidade = None
         self.crs = None
 
-    def executar(self, nome_cidade, gdf_municipio, pesos=None):
-        config = load_config()
+    def executar(self, nome_cidade, gdf_municipio, config=None):
 
         self.cidade = slug_cidade(nome_cidade)
 
@@ -27,42 +27,57 @@ class AnaliseService:
 
         AnaliseRaster(self.cidade, self.crs).executar()
 
+        if config is None:
+            config_service = ConfigService(self.cidade, self.crs)
+            config = config_service.gerar_config()
+
         if config["criterios"]["declividade"]["ativo"]:
-            AnaliseDeclividade(self.cidade, self.crs).executar()
+            AnaliseDeclividade(
+                self.cidade, 
+                self.crs
+            ).executar(
+                classes=config["criterios"]["declividade"]["classes"]
+            )
 
         if config["criterios"]["fluxo_acumulado"]["ativo"]:
-            AnaliseFluxo(self.cidade, self.crs).executar()
+            AnaliseFluxo(
+                self.cidade, 
+                self.crs
+            ).executar(
+                classes=config["criterios"]["fluxo_acumulado"]["classes"]
+            )
 
         if config["criterios"]["uso_do_solo"]["ativo"]:
-            analise_uso = AnaliseUsoSolo(self.cidade, self.crs).executar()
+            analise_uso = AnaliseUsoSolo(
+                self.cidade, 
+                self.crs
+            ).executar(
+                classes=config["criterios"]["uso_do_solo"]["classes"]
+            )
 
             uso_recortado_path = f"outputs/uso_do_solo/uso_do_solo_{self.cidade}_recortado.tif"
 
             recortar_raster(shapefile, analise_uso, uso_recortado_path)
 
         if config["criterios"]["hipsometria"]["ativo"]:
-            AnaliseHipsometria(self.cidade, self.crs).executar()
+            AnaliseHipsometria(
+                self.cidade, 
+                self.crs
+            ).executar(
+                classes=config["criterios"]["hipsometria"]["classes"]
+            )
 
-        if pesos:
-            pesos = [
-                pesos["uso"],
-                pesos["declividade"],
-                pesos["fluxo"],
-                pesos["hipsometria"]
-            ]
-        else:
-            ahp = AHPService()
-            pesos, cr = ahp.calcular_pesos()
-
-        self._gerar_mapa_risco(pesos)
+        self._gerar_mapa_risco(config["pesos"])
 
         risco_path = f"outputs/mapas_de_risco/risco_alagamento_{self.cidade}.tif"
         risco_recortado_path = f"outputs/mapas_de_risco/risco_alagamento_{self.cidade}_recortado.tif"
 
         recortar_raster(shapefile, risco_path, risco_recortado_path)
 
-        return risco_recortado_path
-
+        return {
+            "risco_path": risco_recortado_path,
+            "config": config
+        }
 
     def _definir_sistema_coordenadas(self, gdf_municipio):
         zona_24s = "EPSG:31984"     # SIRGAS 2000 / UTM 24S
@@ -85,7 +100,10 @@ class AnaliseService:
         return shapefile_path
 
     def _gerar_mapa_risco(self, pesos):
-        peso_uso, peso_declividade, peso_fluxo, peso_hipso = pesos
+        peso_uso = pesos["uso"]
+        peso_declividade = pesos["declividade"]
+        peso_fluxo = pesos["fluxo"]
+        peso_hipso = pesos["hipsometria"]
 
         uso_do_solo_reclass = f"outputs/uso_do_solo/uso_do_solo_{self.cidade}_reclass.tif"
         declividade_reclass = f"outputs/declividade/declividade_{self.cidade}_reclass.tif"

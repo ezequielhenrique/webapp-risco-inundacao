@@ -38,20 +38,33 @@
         <div id="overlay" class="overlay"></div>
         <aside id="sidebar" class="sidebar">
             <div class="sidebar-header">
-                <h2>Controles</h2>
+                <h2>Critérios</h2>
                 <button id="close-sidebar" class="close-btn">✕</button>
             </div>
 
-            <p>Filtros</p>
-            <p>Parâmetros</p>
+            <div id="sidebar-content"></div>
         </aside>
 
         <div id="legend" class="map-ui hidden">
-            <p>Risco de Alagamento</p>
-            <i class="legend-color" style="background:#d73027"></i> Alto<br>
-            <i class="legend-color" style="background:#ffffb2"></i> Moderado<br>
-            <i class="legend-color" style="background:#78c679"></i> Baixo<br>
-            <i class="legend-color" style="background:#006837"></i> Muito Baixo<br>
+            <div class="legend-header">
+                <span>Risco de Alagamento</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color" style="background:#d73027"></span>
+                <span>Alto</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color" style="background:#ffffb2"></span>
+                <span>Moderado</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color" style="background:#78c679"></span>
+                <span>Baixo</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color" style="background:#006837"></span>
+                <span>Muito Baixo</span>
+            </div>
         </div>
 
         <!-- SLIDERS -->

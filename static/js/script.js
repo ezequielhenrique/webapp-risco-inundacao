@@ -2,6 +2,7 @@ import { map, createMap } from "./mapa/mapa.js";
 import { createOverlay, createUsoSoloLayer, addOverlay } from "./mapa/layers.js";
 import { initSliders } from "./mapa/sliders.js";
 import { enableClickInfo } from "./mapa/interactions.js";
+import { renderizarSidebar } from "./sidebar.js"
 
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -35,6 +36,7 @@ document.getElementById("btn-executar").addEventListener("click", function() {
 
             initSliders(data);
             enableClickInfo(data.cidade);
+            renderizarSidebar(data.config);
 
             document.getElementById("sliders").classList.remove("hidden");
             document.getElementById("legend").classList.remove("hidden");
@@ -52,56 +54,97 @@ document.getElementById("btn-executar").addEventListener("click", function() {
     });
 });
 
-
-const toggleBtn = document.getElementById("toggle-ahp");
-
-if (toggleBtn) {
-    toggleBtn.addEventListener("click", () => {
-        const panel = document.getElementById("ahp-panel");
-        panel.classList.toggle("hidden");
-    });
-}
-
-// SIDEBAR
+// SIDEBAR + OVERLAY + AHP
 
 const sidebar = document.getElementById("sidebar");
 const overlayEl = document.getElementById("overlay");
 const menuBtn = document.getElementById("menu-toggle");
 
-menuBtn.addEventListener("click", () => {
-    sidebar.classList.add("open");
-    overlayEl.classList.add("active");
-
-    toggleMapInteraction();
-});
-
-overlayEl.addEventListener("click", () => {
-    sidebar.classList.remove("open");
-    overlayEl.classList.remove("active");
-
-    toggleMapInteraction();
-});
-
-function toggleMapInteraction() {
-    if (!map) return;
-
-    const isOpen = sidebar.classList.contains("open");
-
-    if (isOpen) {
-        map.dragging.disable();
-        map.scrollWheelZoom.disable();
-        map.doubleClickZoom.disable();
-    } else {
-        map.dragging.enable();
-        map.scrollWheelZoom.enable();
-        map.doubleClickZoom.enable();
-    }
-}
+const ahpPanel = document.getElementById("ahp-panel");
+const toggleAhpBtn = document.getElementById("toggle-ahp");
 
 const closeBtn = document.getElementById("close-sidebar");
 
-closeBtn.addEventListener("click", () => {
+// ABRIR SIDEBAR
+
+function abrirSidebar() {
+
+    sidebar.classList.add("open");
+    overlayEl.classList.add("active");
+
+    menuBtn.classList.add("active");
+
+    // Fecha painel AHP automaticamente
+    ahpPanel.classList.add("hidden");
+    toggleAhpBtn.classList.remove("active");
+
+    bloquearMapa();
+}
+
+// FECHAR SIDEBAR
+
+function fecharSidebar() {
+
     sidebar.classList.remove("open");
     overlayEl.classList.remove("active");
-    toggleMapInteraction();
+
+    menuBtn.classList.remove("active");
+
+    liberarMapa();
+}
+
+// BLOQUEAR MAPA
+
+function bloquearMapa() {
+
+    if (!map) return;
+
+    map.dragging.disable();
+    map.scrollWheelZoom.disable();
+    map.doubleClickZoom.disable();
+}
+
+// LIBERAR MAPA
+
+function liberarMapa() {
+
+    if (!map) return;
+
+    map.dragging.enable();
+    map.scrollWheelZoom.enable();
+    map.doubleClickZoom.enable();
+}
+
+// EVENTOS SIDEBAR
+
+menuBtn.addEventListener("click", () => {
+
+    const aberta = sidebar.classList.contains("open");
+
+    if (aberta) {
+        fecharSidebar();
+    } else {
+        abrirSidebar();
+    }
 });
+
+closeBtn.addEventListener("click", fecharSidebar);
+
+overlayEl.addEventListener("click", fecharSidebar);
+
+// EVENTO AHP
+
+if (toggleAhpBtn) {
+
+    toggleAhpBtn.addEventListener("click", () => {
+
+        // Fecha sidebar ao abrir AHP
+        fecharSidebar();
+
+        ahpPanel.classList.toggle("hidden");
+        toggleAhpBtn.classList.toggle(
+            "active",
+            !ahpPanel.classList.contains("hidden")
+        );
+    });
+}
