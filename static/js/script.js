@@ -1,5 +1,5 @@
 import { map, createMap } from "./mapa/mapa.js";
-import { createOverlay, createUsoSoloLayer, addOverlay } from "./mapa/layers.js";
+import { createOverlay, createUsoSoloLayer, addOverlay, createPontosAlagamentoLayer } from "./mapa/layers.js";
 import { initSliders } from "./mapa/sliders.js";
 import { enableClickInfo } from "./mapa/interactions.js";
 import { renderizarSidebar } from "./sidebar.js"
@@ -33,6 +33,9 @@ document.getElementById("btn-executar").addEventListener("click", function() {
             addOverlay("Risco de Alagamento", riscoLayer);
 
             createUsoSoloLayer(data.uso_url, data.uso_bounds);
+
+            const alagamentosLayer = createPontosAlagamentoLayer();
+            addOverlay("Pontos de Alagamento", alagamentosLayer);
 
             initSliders(data);
             enableClickInfo(data.cidade);
